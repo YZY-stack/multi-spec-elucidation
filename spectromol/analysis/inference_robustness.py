@@ -1,3 +1,12 @@
+"""
+SpectroMol Robustness Analysis Module
+
+This module performs robustness analysis of the SpectroMol model by evaluating
+performance under various perturbations and noise conditions in spectral data.
+
+Author: SpectroMol Team
+"""
+
 import os
 import torch
 import torch.nn as nn
@@ -5,48 +14,42 @@ import torch.utils.data as data
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from model import *
-from dataset import *
-from sklearn.preprocessing import StandardScaler
 import csv
-from rdkit import Chem, RDLogger, DataStructs
-from rdkit.Chem import AllChem, MACCSkeys
-from Levenshtein import distance as lev
-import matplotlib.pyplot as plt
-import seaborn as sns
 import re
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-RDLogger.DisableLog('rdApp.*')
 from collections import Counter
 from math import sqrt
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+# RDKit imports for molecular processing
+from rdkit import Chem, RDLogger, DataStructs
+from rdkit.Chem import AllChem, MACCSkeys
+RDLogger.DisableLog('rdApp.*')
+
+# NLP and distance metrics
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from Levenshtein import distance as lev
+from sklearn.preprocessing import StandardScaler
+
+# Local imports
+from model import *
+from dataset import *
 from metrics import *
 
 
-
-
+# Device configuration
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 data_split_mode = 'scaffold'
 
 
+# Predefined SMILES character vocabulary
+SMILES_VOCAB = [
+    '<PAD>', '<SOS>', '<EOS>', '<UNK>',
+    'C', 'N', 'O', 'F',
+    '1', '2', '3', '4', '5',
+    '#', '=', '(', ')',
+]
 
-
-# 预先定义的 SMILES 字符集
-SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
-#                 'C', '#', '1', '(', '=', 'O', 
-#                 ')', 'n', 'c', 'N', '2', '[nH]', 
-#                 '3', 'o', 'F', '4', '[N+]', '[O-]', '5', '-'
-# ]
-                'C', 'N', 'O', 'F',
-                '1', '2', '3', '4', '5',
-                '#', '=', '(', ')',
-                ]
-
-                # 'C', 'N', 'O', 'S', 'P', 'F', 'Cl', 'Br', 'I',
-                # 'H', 'B', 'Si', 'Se', 'se',
-                # 'c', 'n', 'o', 's', 'p',
-                # '(', ')', '[', ']', '=', '#', '-', '+', '@', '.', '/', '\\',
-                # '%', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 vocab_size = len(SMILES_VOCAB)
 
 # 创建字符到索引的映射和索引到字符的映射

@@ -1,47 +1,84 @@
+"""
+Molecular Utilities Module
+
+This module provides utility functions for SMILES tokenization, data processing,
+and molecular feature extraction for the ms_mol2mol framework.
+
+Author: ms_mol2mol Team
+"""
+
 import os
 import math
 import random
+import re
+from typing import List, Dict, Tuple
+
 import torch
 import torch.nn as nn
-import re
 import numpy as np
 
-# -------------------------------
-# 1. 定义辅助函数
-# -------------------------------
+
 # ============================
-def tokenize_smiles(smiles):
+# SMILES Processing Utilities
+# ============================
+
+def tokenize_smiles(smiles: str) -> List[str]:
+    """
+    Tokenize SMILES string focusing on C, N, O, F atoms.
+    
+    Uses regex pattern matching to extract chemical tokens including
+    bracketed atoms, ring closures, and chemical bonds.
+    
+    Args:
+        smiles (str): SMILES string representation
+        
+    Returns:
+        List[str]: List of chemical tokens
+    """
     pattern = r'''
-        (\[[CNOF][^\]]*\]) |    # 匹配方括号内的原子，如 [C+], [N-] 等（要求第一个字母为 C、N、O、F）
-        (%\d{2})         |      # 匹配两位数的环闭标记，如 %12
-        ([CNOF])        |       # 匹配单个原子符号 C, N, O, F
-        (\d+)           |       # 匹配环闭数字（一个或多个数字）
-        ([=#\-\+\(\)/\\])       # 匹配化学键、括号和斜杠等符号
+        (\[[CNOF][^\]]*\]) |    # Match bracketed atoms like [C+], [N-] (C,N,O,F only)
+        (%\d{2})         |      # Match two-digit ring closures like %12
+        ([CNOF])        |       # Match single atom symbols C, N, O, F
+        (\d+)           |       # Match ring closure numbers
+        ([=#\-\+\(\)/\\])       # Match chemical bonds, parentheses and slashes
     '''
     tokens = re.findall(pattern, smiles, re.VERBOSE)
-    # 每个匹配返回的是一个元组，取其中非空的部分
+    # Extract non-empty parts from each match tuple
     token_list = [next(filter(None, t)).strip() for t in tokens if any(t)]
     return token_list
 
-def smiles_to_indices(smiles, char2idx, max_length):
+
+def smiles_to_indices(smiles: str, char2idx: Dict[str, int], max_length: int) -> List[int]:
     """
-    将 SMILES 转换为 token 索引序列：
-      - 序列头添加 <SOS>，尾添加 <EOS>
-      - 超长时截断保证最后一位为 <EOS>
-      - 不足时用 <PAD> 填充
+    Convert SMILES string to token indices.
+    
+    Adds <SOS> at the beginning and <EOS> at the end.
+    Truncates if too long (preserving <EOS>) or pads with <PAD> if too short.
+    
+    Args:
+        smiles (str): SMILES string
+        char2idx (dict): Character to index mapping
+        max_length (int): Maximum sequence length
+        
+    Returns:
+        List[int]: Token indices
     """
     tokens = tokenize_smiles(smiles)
     indices = [char2idx.get('<SOS>')]
+    
     for token in tokens:
         if token in char2idx:
             indices.append(char2idx[token])
         else:
             indices.append(char2idx.get('<UNK>'))
+    
     indices.append(char2idx.get('<EOS>'))
+    
     if len(indices) < max_length:
         indices += [char2idx.get('<PAD>')] * (max_length - len(indices))
     else:
         indices = indices[:max_length-1] + [char2idx.get('<EOS>')]
+    
     return indices
 
 
@@ -49,13 +86,24 @@ def smiles_to_indices(smiles, char2idx, max_length):
 
 
 
-def mask_smiles_indices(indices, mask_token_idx, char2idx, mask_prob=0.15):
+def mask_smiles_indices(indices: List[int], mask_token_idx: int, char2idx: Dict[str, int], mask_prob: float = 0.15) -> Tuple[List[int], List[bool]]:
     """
-    对 token 序列采用 BERT 式 mask 策略：
-      - 30% 替换为 <MASK>
-      - 70% 保持原样
-    同时返回 mask_positions（bool 类型，True 表示该位置被 mask）。
-    首尾以及特殊 token (<SOS>, <EOS>, <PAD>) 均不 mask。
+    Apply BERT-style masking strategy to token sequences.
+    
+    Masking strategy:
+      - 30% replaced with <MASK> token
+      - 70% kept unchanged
+    Returns mask_positions (bool type, True indicates position is masked).
+    Special tokens (<SOS>, <EOS>, <PAD>) and beginning/end positions are not masked.
+    
+    Args:
+        indices (List[int]): Original token indices
+        mask_token_idx (int): Index of the <MASK> token
+        char2idx (Dict[str, int]): Character to index mapping
+        mask_prob (float): Probability of masking each token
+        
+    Returns:
+        Tuple[List[int], List[bool]]: Masked indices and mask positions
     """
     pad_token = char2idx.get('<PAD>')
     sos_token = char2idx.get('<SOS>')
@@ -65,14 +113,14 @@ def mask_smiles_indices(indices, mask_token_idx, char2idx, mask_prob=0.15):
     mask_positions = [False] * len(indices)
     
     for i in range(1, len(indices)-1):
-        # 跳过特殊 token
+        # Skip special tokens
         if indices[i] in [pad_token, sos_token, eos_token]:
             continue
         if random.random() < mask_prob:
             mask_positions[i] = True
             if random.random() < 0.3:
                 masked_indices[i] = mask_token_idx
-            # 70% 保持原样
+            # 70% keep unchanged
     return masked_indices, mask_positions
 
 
@@ -83,10 +131,17 @@ def mask_smiles_indices(indices, mask_token_idx, char2idx, mask_prob=0.15):
 
 
 
-def decode_indices(indices, idx2char):
+def decode_indices(indices: List[int], idx2char: Dict[int, str]) -> str:
     """
-    根据索引序列解码为 SMILES 字符串，遇到 <EOS> 停止。
-    跳过 <SOS> 与 <PAD>。
+    Decode index sequence to SMILES string, stopping at <EOS>.
+    Skips <SOS> and <PAD> tokens.
+    
+    Args:
+        indices (List[int]): Token indices
+        idx2char (Dict[int, str]): Index to character mapping
+        
+    Returns:
+        str: Decoded SMILES string
     """
     tokens = []
     for idx in indices:
@@ -102,12 +157,15 @@ def decode_indices(indices, idx2char):
 
 
 # ============================
-# 2. Atom-type 特征计算（使用 rdkit）
+# Molecular Feature Calculation (using rdkit)
 # ============================
-from rdkit import Chem
-from rdkit.Chem import Descriptors
+try:
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors
+except ImportError:
+    print("Warning: RDKit not found. Some functions may not work properly.")
 
-# 定义前五周期原子量表
+# Atomic weights for first five periods of periodic table
 atomic_weights = {
     "H": 1.007825,
     "He": 4.002603,
@@ -167,8 +225,14 @@ atomic_weights = {
 
 def calculate_mol_weight_custom(mol):
     """
-    使用自定义精确原子量计算分子量，
-    若某原子不在 atomic_weights 中，则使用 RDKit 内置原子量作为后备。
+    Calculate molecular weight using custom precise atomic weights.
+    If an atom is not in atomic_weights, use RDKit's built-in atomic weight as fallback.
+    
+    Args:
+        mol: RDKit molecule object
+        
+    Returns:
+        float: Molecular weight or None if mol is invalid
     """
     if mol is None:
         return None
@@ -178,14 +242,24 @@ def calculate_mol_weight_custom(mol):
         if symbol in atomic_weights:
             mol_weight += atomic_weights[symbol]
         else:
-            mol_weight += Descriptors.AtomicWeight(symbol)
+            try:
+                mol_weight += Descriptors.AtomicWeight(symbol)
+            except:
+                # Fallback for unknown atoms
+                mol_weight += 1.0
     return mol_weight
 
 def calculate_dbe(mol):
     """
-    计算分子的 DBE（Degree of Unsaturation）：
+    Calculate the DBE (Degree of Unsaturation) of a molecule:
       DBE = (2*C + 2 + N - (H + X)) / 2
-    其中 C、N、H、X 分别为碳、氮、氢和卤素原子数
+    Where C, N, H, X are the counts of carbon, nitrogen, hydrogen, and halogen atoms respectively.
+    
+    Args:
+        mol: RDKit molecule object
+        
+    Returns:
+        int: Degree of unsaturation
     """
     C = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == 'C')
     N = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == 'N')
@@ -195,22 +269,37 @@ def calculate_dbe(mol):
     dbe = (2 * C + 2 + N - (H + X)) / 2
     return int(dbe)
 
-def compute_atom_types(smiles):
+def compute_atom_types(smiles: str) -> List[float]:
     """
-    利用 rdkit 计算分子的 DBE、精确分子量（对数归一化）以及前五周期各元素的计数，
-    返回向量维度为：2 + len(atomic_weights)。
+    Calculate molecular DBE, precise molecular weight (log-normalized), and element counts
+    for the first five periods using RDKit.
+    
+    Returns vector dimension: 2 + len(atomic_weights).
+    
+    Args:
+        smiles (str): SMILES string representation
+        
+    Returns:
+        List[float]: Feature vector [dbe, log_mol_weight, atom_counts...]
     """
-    mol = Chem.MolFromSmiles(smiles)
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+    except:
+        mol = None
+        
     if mol is None:
-        # 理论上此情况在数据预处理阶段已被过滤
+        # This case should be filtered during data preprocessing
         return [0.0] * (2 + len(atomic_weights))
+        
     dbe = calculate_dbe(mol)
     mol = Chem.AddHs(mol)
     mol_weight = round(calculate_mol_weight_custom(mol), 6)
     mol_weight = np.log1p(mol_weight) if mol_weight > 0 else 0.0
+    
     counts = []
     for elem in atomic_weights.keys():
         cnt = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == elem)
         counts.append(cnt)
+        
     return [float(dbe), mol_weight] + counts
 

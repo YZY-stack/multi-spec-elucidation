@@ -1,3 +1,12 @@
+"""
+SpectroMol Inference Module
+
+This module provides inference functionality for molecular structure elucidation
+from multi-modal spectral data using trained deep learning models.
+
+Author: SpectroMol Team
+"""
+
 import os
 import torch
 import torch.nn as nn
@@ -5,61 +14,67 @@ import torch.utils.data as data
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from model import *
-from dataset import *
 from sklearn.preprocessing import StandardScaler
 import csv
-from rdkit import Chem, RDLogger, DataStructs
-from rdkit.Chem import AllChem, MACCSkeys
-from Levenshtein import distance as lev
-import matplotlib.pyplot as plt
-import seaborn as sns
 import re
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-RDLogger.DisableLog('rdApp.*')
 from collections import Counter
 from math import sqrt
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+# RDKit imports for molecular processing
+from rdkit import Chem, RDLogger, DataStructs
+from rdkit.Chem import AllChem, MACCSkeys
+RDLogger.DisableLog('rdApp.*')
+
+# NLP metrics
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from Levenshtein import distance as lev
+
+# Local imports
+from model import *
+from dataset import *
 from metrics import *
 
 
-
-
+# Device configuration
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 data_split_mode = 'scaffold'
 
 
+# Predefined SMILES character vocabulary
+SMILES_VOCAB = [
+    '<PAD>', '<SOS>', '<EOS>', '<UNK>',
+    'C', 'N', 'O', 'F',
+    '1', '2', '3', '4', '5',
+    '#', '=', '(', ')',
+]
 
-
-# 预先定义的 SMILES 字符集
-SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
-#                 'C', '#', '1', '(', '=', 'O', 
-#                 ')', 'n', 'c', 'N', '2', '[nH]', 
-#                 '3', 'o', 'F', '4', '[N+]', '[O-]', '5', '-'
-# ]
-                'C', 'N', 'O', 'F',
-                '1', '2', '3', '4', '5',
-                '#', '=', '(', ')',
-                ]
-
-                # 'C', 'N', 'O', 'S', 'P', 'F', 'Cl', 'Br', 'I',
-                # 'H', 'B', 'Si', 'Se', 'se',
-                # 'c', 'n', 'o', 's', 'p',
-                # '(', ')', '[', ']', '=', '#', '-', '+', '@', '.', '/', '\\',
-                # '%', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 vocab_size = len(SMILES_VOCAB)
 
-# 创建字符到索引的映射和索引到字符的映射
+# Create character-to-index and index-to-character mappings
 char2idx = {token: idx for idx, token in enumerate(SMILES_VOCAB)}
 idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
 
-
-
-
-
-
 def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_length=100, save_dir='corr_draw'):
+    """
+    Perform inference with comprehensive analysis of model predictions.
+    
+    This function evaluates the model on a dataset and computes various metrics
+    including BLEU scores, molecular similarity measures, and structural accuracy.
+    
+    Args:
+        model: Trained SpectroMol model
+        dataloader: DataLoader containing test data
+        char2idx (dict): Character to index mapping
+        idx2char (dict): Index to character mapping  
+        max_seq_length (int): Maximum sequence length for generation
+        save_dir (str): Directory to save analysis results
+        
+    Returns:
+        dict: Dictionary containing various evaluation metrics
+    """
     model.eval()
     smoothie = SmoothingFunction().method4
 
@@ -119,15 +134,15 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
 
 
-            # atom_types顺序为[C, N, O, F]
+            # atom_types order: [C, N, O, F]
             atom_counts_array = atom_types[:, 1:].cpu().numpy()  # [batch_size, 4]
             required_atom_counts = []
             for counts in atom_counts_array:
-                # 转为字典
+                # Convert to dictionary
                 req_dict = dict(zip(['C', 'N', 'O', 'F'], counts))
                 required_atom_counts.append(req_dict)
 
-            # 推断
+            # Perform inference
             predicted_smiles_list = inference_beam(
                 model,
                 ir_spectrum,
@@ -140,7 +155,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
                 max_seq_length=100,
                 atom_types=atom_types,
                 required_atom_counts=required_atom_counts,
-                beam_size=5,  # 自定义beam_size
+                beam_size=5,  # Custom beam_size
             )
 
             for i in range(batch_size):
@@ -291,7 +306,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
 
 
-# 定义单个样本的推理函数
+# Define single sample inference function
 def inference(model, ir_spectrum, uv_spectrum, c_spectrum, h_spectrum,
               high_res_mass, char2idx, idx2char, max_seq_length=100, atom_types=None):
     model.eval()
@@ -326,7 +341,7 @@ def inference(model, ir_spectrum, uv_spectrum, c_spectrum, h_spectrum,
         batch_size = ir_spectrum.size(0)
         device = ir_spectrum.device
 
-        # 用<SOS>标记初始化输入序列
+        # Initialize input sequence with <SOS> token
         tgt_indices = torch.full((1, batch_size), char2idx['<SOS>'], dtype=torch.long, device=device)
 
         generated_tokens = []
@@ -372,12 +387,12 @@ def inference(model, ir_spectrum, uv_spectrum, c_spectrum, h_spectrum,
 
 def apply_constraints_for_beam(candidate_seq, char2idx, idx2char, required_atom_counts, open_rings):
     """
-    对单条候选序列进行约束检查，并返回一个valid_tokens布尔向量表示可用的token。
+    Apply constraint checking for a single candidate sequence and return a valid_tokens boolean vector representing available tokens.
     candidate_seq: list of int (token indices)
     required_atom_counts: dict {'C':int, 'N':int, 'O':int, 'F':int}
     open_rings: dict for ring status {'1':0,'2':0,'3':0,'4':0,'5':0}
     """
-    # 将candidate_seq中去掉<PAD>,<SOS>,<EOS>
+    # Remove <PAD>, <SOS>, <EOS> from candidate_seq
     seq_chars = []
     for t in candidate_seq:
         if t == char2idx['<EOS>']:
@@ -385,7 +400,7 @@ def apply_constraints_for_beam(candidate_seq, char2idx, idx2char, required_atom_
         if t not in [char2idx['<PAD>'], char2idx['<SOS>']]:
             seq_chars.append(idx2char[t])
     
-    # 初始化valid_tokens
+    # Initialize valid_tokens
     vocab_size = len(idx2char)
     valid_tokens = [True] * vocab_size
 
@@ -394,31 +409,31 @@ def apply_constraints_for_beam(candidate_seq, char2idx, idx2char, required_atom_
         if tok in current_atom_counts:
             current_atom_counts[tok] += 1
 
-    # 原子计数约束
+    # Atom count constraints
     for atom, req_count in required_atom_counts.items():
         if current_atom_counts[atom] >= req_count:
             a_idx = char2idx[atom]
             valid_tokens[a_idx] = False
 
-    # 括号匹配
+    # Parentheses matching
     open_p = seq_chars.count('(')
     close_p = seq_chars.count(')')
     if close_p >= open_p:
-        # 不能再生成')'
+        # Cannot generate ')' anymore
         rp_idx = char2idx.get(')', None)
         if rp_idx is not None:
             valid_tokens[rp_idx] = False
 
-    # 避免连续两个键('#','=')
+    # Avoid consecutive bonds ('#', '=')
     if len(seq_chars) > 0 and seq_chars[-1] in ['#','=']:
-        # 下个token不能是'#','='
+        # Next token cannot be '#' or '='
         hash_idx = char2idx['#']
         eq_idx = char2idx['=']
         valid_tokens[hash_idx] = False
         valid_tokens[eq_idx] = False
 
-    # # 环标记规则 (同之前的简化逻辑)
-    # # 若某数字环已出现两次，不允许再次出现
+    # # Ring marker rules (same simplified logic as before)
+    # # If a numeric ring has appeared twice, do not allow it to appear again
     # digits = ['1','2','3','4','5']
     # count_digits = {d:0 for d in digits}
     # for tok in seq_chars:
@@ -427,11 +442,11 @@ def apply_constraints_for_beam(candidate_seq, char2idx, idx2char, required_atom_
 
     # for d in digits:
     #     if count_digits[d] >= 2:
-    #         # 禁止再次出现该数字
+    #         # Prohibit this digit from appearing again
     #         d_idx = char2idx[d]
     #         valid_tokens[d_idx] = False
 
-    # 将所有invalid的token置为False
+    # Set all invalid tokens to False
     return valid_tokens
 
 
@@ -501,18 +516,18 @@ def inference_beam(
 
         final_sequences = []
         for b in range(batch_size):
-            # 取出第b个样本的memory和atom_types
+            # Extract memory and atom_types for the b-th sample
             mem_single = memory[:, b:b+1, :] # [src_len, 1, d_model]
             if atom_types is not None:
                 atom_single = atom_types[b:b+1, :] # [1, num_atom_types]
             else:
                 atom_single = torch.zeros((1, 6), device=device)
 
-            # 扩展到beam_size
+            # Expand to beam_size
             mem = mem_single.expand(-1, beam_size, -1) # [src_len, beam_size, d_model]
             atom_beam = atom_single.expand(beam_size, -1) # [beam_size, num_atom_types]
 
-            # 初始化beam
+            # Initialize beam
             beams = [{
                 'seq': [char2idx['<SOS>']],
                 'log_prob': 0.0,
@@ -521,11 +536,11 @@ def inference_beam(
             }]
 
             for step in range(max_seq_length):
-                # 在这里对所有beam的序列进行长度对齐
+                # Align the length of all beam sequences here
                 max_len = max(len(b['seq']) for b in beams)
                 for b_ in beams:
                     if len(b_['seq']) < max_len:
-                        # 用<PAD>补齐
+                        # Pad with <PAD>
                         b_['seq'].extend([char2idx['<PAD>']] * (max_len - len(b_['seq'])))
 
                 current_length = max_len
@@ -540,7 +555,7 @@ def inference_beam(
                 all_expanded = []
                 for i, beam in enumerate(beams):
                     if beam['ended']:
-                        # 已结束的不扩展
+                        # Already ended, do not expand
                         all_expanded.append(beam)
                         continue
 
@@ -550,19 +565,19 @@ def inference_beam(
 
                     beam_logits = output_logits[i].clone()
 
-                    # 约束过滤在topk前进行
+                    # Apply constraint filtering before topk
                     for t_idx, valid in enumerate(valid_tokens):
                         if not valid:
                             beam_logits[t_idx] = float('-inf')
 
-                    # 若全部无效
+                    # If all are invalid
                     if torch.all(torch.isinf(beam_logits)):
                         continue
 
-                    # topk选取
+                    # TopK selection
                     topk_values, topk_indices = torch.topk(beam_logits, beam_size, dim=-1)
 
-                    # 展开beam
+                    # Expand beam
                     log_probs = F.log_softmax(beam_logits.unsqueeze(0), dim=-1)[0]
                     for val, idx_tok in zip(topk_values, topk_indices):
                         new_seq = beam['seq'] + [idx_tok.item()]
@@ -579,15 +594,15 @@ def inference_beam(
                         })
 
                 if len(all_expanded) == 0:
-                    # 无法扩展
+                    # Cannot expand
                     break
 
-                # 从all_expanded中选出log_prob最高的beam_size条
+                # Select the beam_size candidates with highest log_prob from all_expanded
                 all_expanded = sorted(all_expanded, key=lambda x: x['log_prob'], reverse=True)
                 beams = all_expanded[:beam_size]
 
                 if all(b['ended'] for b in beams):
-                    # 全部结束
+                    # All ended
                     break
 
             ended_beams = [beam for beam in beams if beam['ended']]
@@ -616,11 +631,11 @@ def inference_beam(
 
 
 def load_model(model_path, vocab_size, char2idx):
-    # 初始化模型
+    # Initialize model
     model = AtomPredictionModel(vocab_size=vocab_size, count_tasks_classes=None, binary_tasks=None)
     model.to(device)
 
-    # 加载模型权重
+    # Load model weights
     model.load_state_dict(torch.load(model_path, map_location=device), True)
     model.eval()
 
@@ -631,18 +646,18 @@ def load_model(model_path, vocab_size, char2idx):
 
 
 if __name__ == "__main__":
-    # 定义模型文件路径
-    # model_path = '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/weights_scaffold_at/0806_ft.pth'
-    model_path = '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/weights_scaffold_semantic_simple/best_semantic_supervised.pth'
+    # Define model file path
+    # model_path = './fangyang/gp/csv/weights_scaffold_at/0806_ft.pth'
+    model_path = './fangyang/gp/csv/weights_scaffold_semantic_simple/best_semantic_supervised.pth'
 
-    # 加载模型
+    # Load model
     model = load_model(model_path, vocab_size, char2idx)
 
     
     
 
 
-    # 预先定义的 SMILES 字符集
+    # Predefined SMILES character set
     SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
                     'C', 'N', 'O', 'F',
                     '1', '2', '3', '4', '5',
@@ -650,7 +665,7 @@ if __name__ == "__main__":
                     ]
     vocab_size = len(SMILES_VOCAB)
 
-    # 创建字符到索引的映射和索引到字符的映射
+    # Create character-to-index and index-to-character mappings
     char2idx = {token: idx for idx, token in enumerate(SMILES_VOCAB)}
     idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
@@ -660,7 +675,7 @@ if __name__ == "__main__":
     # uv
     print('load uv file...')
     uv_max_value = 15.0
-    uv_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/uv.csv')
+    uv_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/uv.csv')
     peak_columns = [col for col in uv_spe_filtered.columns if 'peak' in col]
     uv_spe_filtered[peak_columns] = uv_spe_filtered[peak_columns] / uv_max_value
     uv_spe_filtered = uv_spe_filtered.to_numpy()
@@ -670,7 +685,7 @@ if __name__ == "__main__":
     # ir
     print('load ir file...')
     ir_max_value = 4000.0
-    ir_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/ir_82.csv')
+    ir_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/ir_82.csv')
     peak_columns = [col for col in ir_spe_filtered.columns if 'peak' in col]
     ir_spe_filtered[peak_columns] = ir_spe_filtered[peak_columns] / ir_max_value
     ir_spe_filtered = ir_spe_filtered.to_numpy()
@@ -681,7 +696,7 @@ if __name__ == "__main__":
     print('load 1dc-nmr with dept file...')
     cnmr_max_value = 220.0
     cnmr_min_value = -10.0
-    nmrc_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_cnmr_dept.csv')
+    nmrc_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_cnmr_dept.csv')
     peak_columns = [col for col in nmrc_spe_filtered.columns if 'peak' in col]
     nmrc_spe_filtered[peak_columns] = (nmrc_spe_filtered[peak_columns] - cnmr_min_value) / (cnmr_max_value - cnmr_min_value)
     nmrc_spe_filtered = nmrc_spe_filtered.to_numpy()
@@ -689,7 +704,7 @@ if __name__ == "__main__":
     print('load 2dc-nmr (c-c, c-x) file...')
     cnmr_2d_max_value = 450.0
     cnmr_2d_min_value = -400.0
-    twoD_nmr = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_cnmr_ina_chsqc.csv')
+    twoD_nmr = pd.read_csv('./gp/qm9_all_raw_spe/2d_cnmr_ina_chsqc.csv')
     peak_columns = [col for col in twoD_nmr.columns if 'peak' in col]
     twoD_nmr[peak_columns] = (twoD_nmr[peak_columns] - cnmr_2d_min_value) / (cnmr_2d_max_value - cnmr_2d_min_value)
     twoD_nmr = twoD_nmr.to_numpy()
@@ -702,17 +717,17 @@ if __name__ == "__main__":
     print('load 1d h-nmr file...')
     nmrh_max_value = 12.0
     nmrh_min_value = -2.0
-    nmrh_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_hnmr.csv')
+    nmrh_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_hnmr.csv')
     peak_columns = [col for col in nmrh_spe_filtered.columns if 'peak' in col]
 
-    # 过滤H-NMR异常值 - 先识别异常样本，但不对其归一化
+    # Filter H-NMR outliers - first identify abnormal samples, but do not normalize them
     print('Filtering H-NMR samples with abnormal values...')
     threshold = 500.0
     nmrh_max_values = nmrh_spe_filtered[peak_columns].max(axis=1)
     h_nmr_abnormal_mask = nmrh_max_values > threshold
     h_nmr_abnormal_indices = set(np.where(h_nmr_abnormal_mask)[0])
 
-    # 使用你设定的min和max值进行归一化（对所有样本，包括异常样本，但异常样本稍后会被过滤掉）
+    # Use your set min and max values for normalization (for all samples, including abnormal samples, but abnormal samples will be filtered out later)
     nmrh_spe_filtered[peak_columns] = (nmrh_spe_filtered[peak_columns] - nmrh_min_value) / (nmrh_max_value - nmrh_min_value)
     nmrh_spe_filtered = nmrh_spe_filtered.to_numpy()
 
@@ -720,7 +735,7 @@ if __name__ == "__main__":
     # HSQC
     hsqc_max_value = 400.0
     hsqc_min_value = -350.0
-    hsqc = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_hhsqc.csv')
+    hsqc = pd.read_csv('./gp/qm9_all_raw_spe/2d_hhsqc.csv')
     peak_columns = [col for col in hsqc.columns if 'peak' in col]
     hsqc[peak_columns] = (hsqc[peak_columns] - hsqc_min_value) / (hsqc_max_value - hsqc_min_value)
     hsqc = hsqc.to_numpy()
@@ -729,7 +744,7 @@ if __name__ == "__main__":
     # COSY
     cosy_max_value = 14.0
     cosy_min_value = -2.0
-    nmr_cosy = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_hcosy.csv')
+    nmr_cosy = pd.read_csv('./gp/qm9_all_raw_spe/2d_hcosy.csv')
     hxyh_columns = [col for col in nmr_cosy.columns if 'H_X_Y_H' in col]
     nmr_cosy = nmr_cosy[hxyh_columns]
     peak_columns = [col for col in nmr_cosy.columns if 'peak' in col]
@@ -739,21 +754,21 @@ if __name__ == "__main__":
     # # J2D
     # j2d_max_value = 30.0
     # j2d_min_value = -30.0
-    # j2d = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_h_j2d.csv')
+    # j2d = pd.read_csv('./gp/qm9_all_raw_spe/2d_h_j2d.csv')
     # j2d_columns = [col for col in j2d.columns if 'coupling' in col]
     # j2d = j2d[j2d_columns]
 
-    # # 过滤J2D异常值 - 正确检测异常值
+    # # Filter J2D outliers - correctly detect outliers
     # print('Filtering J2D samples with abnormal values...')
     # j2d_max_values = j2d[j2d_columns].abs().max(axis=1)
     # j2d_abnormal_mask = j2d_max_values > threshold
     # j2d_abnormal_indices = set(np.where(j2d_abnormal_mask)[0])
 
-    # # 使用设定的min和max值进行归一化
+    # # Use set min and max values for normalization
     # j2d[j2d_columns] = (j2d[j2d_columns] - j2d_min_value) / (j2d_max_value - j2d_min_value)
     # j2d = j2d.to_numpy()
 
-    # 合并所有异常样本索引
+    # Merge all abnormal sample indices
     # all_abnormal_indices = h_nmr_abnormal_indices.union(j2d_abnormal_indices)
     all_abnormal_indices = h_nmr_abnormal_indices
     all_abnormal_indices = sorted(list(all_abnormal_indices))
@@ -768,7 +783,7 @@ if __name__ == "__main__":
     # F-NMR
     fnmr_max_value = 0.0001
     fnmr_min_value = -400.0
-    nmrf_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_fnmr.csv')
+    nmrf_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_fnmr.csv')
     peak_columns = [col for col in nmrf_spe_filtered.columns if 'peak' in col]
     nmrf_spe_filtered[peak_columns] = (nmrf_spe_filtered[peak_columns] - fnmr_min_value) / (fnmr_max_value - fnmr_min_value)
     nmrf_spe_filtered = nmrf_spe_filtered.to_numpy()
@@ -776,7 +791,7 @@ if __name__ == "__main__":
     # N-NMR  
     nnmr_max_value = 400.0
     nnmr_min_value = -260.0
-    nmrn_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_nnmr.csv')
+    nmrn_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_nnmr.csv')
     peak_columns = [col for col in nmrn_spe_filtered.columns if 'peak' in col]
     nmrn_spe_filtered[peak_columns] = (nmrn_spe_filtered[peak_columns] - nnmr_min_value) / (nnmr_max_value - nnmr_min_value)
     nmrn_spe_filtered = nmrn_spe_filtered.to_numpy()
@@ -784,7 +799,7 @@ if __name__ == "__main__":
     # O-NMR
     onmr_max_value = 460.0
     onmr_min_value = -385.0
-    nmro_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_onmr.csv')
+    nmro_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_onmr.csv')
     peak_columns = [col for col in nmro_spe_filtered.columns if 'peak' in col]
     nmro_spe_filtered[peak_columns] = (nmro_spe_filtered[peak_columns] - onmr_min_value) / (onmr_max_value - onmr_min_value)
     nmro_spe_filtered = nmro_spe_filtered.to_numpy()
@@ -798,7 +813,7 @@ if __name__ == "__main__":
 
     # zhipu
     print('load high-mass file...')
-    mass = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/ms.csv')
+    mass = pd.read_csv('./gp/qm9_all_raw_spe/ms.csv')
     high_mass_spe = mass.to_numpy()
     print('high-mass_spe:', high_mass_spe.shape)
 
@@ -809,18 +824,18 @@ if __name__ == "__main__":
 
 
     # smiles
-    smiles_list = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/smiles.csv').values.tolist() ### [[smiles1], [smiles2], ...]
+    smiles_list = pd.read_csv('./gp/qm9_all_raw_spe/smiles.csv').values.tolist() ### [[smiles1], [smiles2], ...]
     smiles_lengths = [len(smiles[0]) for smiles in smiles_list]
     max_smiles_length = max(smiles_lengths)
     max_seq_length = max_smiles_length + 2
-    print(f"SMILES 序列的最大长度为：{max_smiles_length}")
-    print(f"模型中应使用的 max_seq_length 为：{max_seq_length}")
+    print(f"Maximum length of SMILES sequences: {max_smiles_length}")
+    print(f"max_seq_length to be used in the model: {max_seq_length}")
 
 
-    # 获取所有辅助任务
+    # Get all auxiliary tasks
     # # Get the list of columns
-    # # auxiliary_data = pd.read_csv('/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task_canonical.csv')
-    # auxiliary_data = pd.read_csv('/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task.csv')
+    # # auxiliary_data = pd.read_csv('./fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task_canonical.csv')
+    # auxiliary_data = pd.read_csv('./fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task.csv')
     # columns = auxiliary_data.columns.tolist()
     # # Exclude 'smiles' and 'id' columns to get auxiliary tasks
     # auxiliary_tasks = [col for col in columns if col not in ['smiles', 'id']]
@@ -829,10 +844,10 @@ if __name__ == "__main__":
 
 
     # file_prefixes = {
-    #     "c_nmr": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/C_NMR_TA.csv',
-    #     "h_nmr": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/H_NMR_TA.csv',
-    #     # "ir": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/IR_TA.csv',
-    #     "ms": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/MS_TA.csv',
+    #     "c_nmr": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/C_NMR_TA.csv',
+    #     "h_nmr": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/H_NMR_TA.csv',
+    #     # "ir": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/IR_TA.csv',
+    #     "ms": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/MS_TA.csv',
     # }
     # auxiliary_data = pd.DataFrame()
     # for prefix, filepath in file_prefixes.items():
@@ -841,22 +856,22 @@ if __name__ == "__main__":
     #     auxiliary_data = pd.concat([auxiliary_data, df], axis=1)
 
 
-    auxiliary_data = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
+    auxiliary_data = pd.read_csv('./gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
 
 
     columns = auxiliary_data.columns.tolist()
     auxiliary_tasks = [col for col in columns]
     # auxiliary_tasks = ['ring_count']
 
-    # 从 auxiliary_data 中筛选包含 "ring" 的列
+    # Filter columns containing "ring" from auxiliary_data
     # ring_columns = [col for col in auxiliary_data.columns if "ring" in col.lower()]
     # ring_columns = [
     #     "c_nmr_Ring_size1", "c_nmr_Ring_size2", "c_nmr_Ring_size3", "c_nmr_Ring_size4", "c_nmr_Ring_size5", "c_nmr_Ring_size6",
     #     "h_nmr_H_connected_ring_size1", "h_nmr_H_connected_ring_size2", "h_nmr_H_connected_ring_size3", "h_nmr_H_connected_ring_size4", "h_nmr_H_connected_ring_size5", "h_nmr_H_connected_ring_size6", "h_nmr_H_connected_ring_size7", "h_nmr_H_connected_ring_size8",
     # ]
-    # # 只保留带有 "ring" 的特征
+    # # Only keep features with "ring"
     # auxiliary_data = auxiliary_data[ring_columns]
-    # # 更新 auxiliary_tasks 列表
+    # # Update auxiliary_tasks list
     # auxiliary_tasks = ring_columns
     print(f"Auxiliary tasks: {auxiliary_tasks}")
     print(f"Number of ATs: {len(auxiliary_tasks)}")
@@ -877,17 +892,16 @@ if __name__ == "__main__":
 
 
         
+    # First read dataset split files
+    train_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/train.csv')
+    val_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/val.csv')
+    test_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/test.csv')
 
-    # 先读取数据集划分文件
-    train_df = pd.read_csv(f'/data4/linkaiqing/sm_pretrained/gp/csv/dataset/{data_split_mode}/train.csv')
-    val_df = pd.read_csv(f'/data4/linkaiqing/sm_pretrained/gp/csv/dataset/{data_split_mode}/val.csv')
-    test_df = pd.read_csv(f'/data4/linkaiqing/sm_pretrained/gp/csv/dataset/{data_split_mode}/test.csv')
-
-    # 如果有异常样本，先从数据划分文件中移除对应的SMILES
+    # If there are abnormal samples, first remove corresponding SMILES from data split files
     if len(all_abnormal_indices) > 0:
         print(f"Processing {len(all_abnormal_indices)} abnormal samples...")
         
-        # 获取异常样本对应的SMILES
+        # Get abnormal SMILES samples
         abnormal_smiles = set()
         for idx in all_abnormal_indices:
             if idx < len(smiles_list):
@@ -895,7 +909,7 @@ if __name__ == "__main__":
         
         print(f"Found {len(abnormal_smiles)} unique abnormal SMILES")
         
-        # 从各个数据集中移除异常SMILES
+        # Remove abnormal SMILES from each dataset
         original_train_size = len(train_df)
         original_val_size = len(val_df)
         original_test_size = len(test_df)
@@ -908,12 +922,12 @@ if __name__ == "__main__":
         print(f"Val set: {original_val_size} -> {len(val_df)} (removed {original_val_size - len(val_df)})")
         print(f"Test set: {original_test_size} -> {len(test_df)} (removed {original_test_size - len(test_df)})")
         
-        # 然后过滤原始数据
+        # Then filter original data
         total_samples = len(smiles_list)
         normal_mask = np.ones(total_samples, dtype=bool)
         normal_mask[all_abnormal_indices] = False
         
-        # 过滤所有数组
+        # Filter all arrays
         ir_spe_filtered = ir_spe_filtered[normal_mask]
         uv_spe_filtered = uv_spe_filtered[normal_mask]
         nmrh_spe_filtered = nmrh_spe_filtered[normal_mask]
@@ -921,7 +935,7 @@ if __name__ == "__main__":
         high_mass_spe = high_mass_spe[normal_mask]
         atom_type = atom_type[normal_mask]
         
-        # 使用原始的smiles_list创建过滤后的列表
+        # Create filtered list using original smiles_list
         original_smiles_list = smiles_list.copy()
         smiles_list = [original_smiles_list[i] for i in range(total_samples) if normal_mask[i]]
         auxiliary_data = auxiliary_data[normal_mask].reset_index(drop=True)
@@ -929,17 +943,17 @@ if __name__ == "__main__":
         print(f"Filtered dataset: {total_samples} -> {len(smiles_list)} samples")
 
     print(f"Final dataset size: {len(smiles_list)}")
-    print(f"确保数据一致性检查...")
+    print(f"Ensuring data consistency check...")
     assert len(smiles_list) == len(auxiliary_data) == ir_spe_filtered.shape[0], "Data length mismatch after filtering!"
 
-    # 创建 SMILES 到索引的映射
+    # Create SMILES to index mapping
     smiles_to_index = {smiles[0]: idx for idx, smiles in enumerate(smiles_list)}
 
-    # 4. 获取各数据集的索引
+    # 4. Get indices for each dataset
     val_indices, val_missing_smiles = get_indices(val_df['smiles'], smiles_to_index)
     test_indices, test_missing_smiles = get_indices(test_df['smiles'], smiles_to_index)
 
-    # 划分验证集数据
+    # Split validation set data
     val_ir_spe_filtered = ir_spe_filtered[val_indices]
     val_uv_spe_filtered = uv_spe_filtered[val_indices]
     val_nmrh_spe_filtered = nmrh_spe_filtered[val_indices]
@@ -949,26 +963,22 @@ if __name__ == "__main__":
     val_aux_data = auxiliary_data.iloc[val_indices].reset_index(drop=True)
     atom_types_list_val = atom_type[val_indices]
 
-    # 划分测试集数据
+    # Split test set data
     test_ir_spe_filtered = ir_spe_filtered[test_indices]
     test_uv_spe_filtered = uv_spe_filtered[test_indices]
     test_nmrh_spe_filtered = nmrh_spe_filtered[test_indices]
     test_nmrc_spe_filtered = nmrc_spe_filtered[test_indices]
     test_high_mass_spe = high_mass_spe[test_indices]
     test_smiles_list = [smiles_list[idx] for idx in test_indices]
-    test_aux_data = auxiliary_data.iloc[test_indices].reset_index(drop=True)
-    atom_types_list_test = atom_type[test_indices]
+    test_aux_data = auxiliary_data.iloc[test_indices].reset_index(drop=True)    atom_types_list_test = atom_type[test_indices]
 
 
-
-
-
-    # 定义 count_tasks 和 binary_tasks
+    # Define count_tasks and binary_tasks
     count_tasks = [at for at in auxiliary_tasks if 'Has' not in at and 'Is' not in at]
     binary_tasks = [at for at in auxiliary_tasks if 'Has' in at or 'Is' in at]
 
 
-    # 创建验证集数据集
+    # Create validation dataset
     val_dataset = SpectraDataset(
         ir_spectra=val_ir_spe_filtered,
         uv_spectra=val_uv_spe_filtered,
@@ -984,7 +994,7 @@ if __name__ == "__main__":
         atom_types_list=atom_types_list_val, 
     )
 
-    # 创建测试集数据集
+    # Create test dataset
     test_dataset = SpectraDataset(
         ir_spectra=test_ir_spe_filtered,
         uv_spectra=test_uv_spe_filtered,
@@ -1003,7 +1013,7 @@ if __name__ == "__main__":
 
     from torch.utils.data import DataLoader
 
-    # 创建验证集数据加载器
+    # Create validation dataloader
     val_dataloader = DataLoader(
         val_dataset,
         batch_size=128, 
@@ -1012,7 +1022,7 @@ if __name__ == "__main__":
         drop_last=True
     )
 
-    # 创建测试集数据加载器（如果需要）
+    # Create test dataloader (if needed)
     test_dataloader = DataLoader(
         test_dataset,
         batch_size=128,
@@ -1028,14 +1038,14 @@ if __name__ == "__main__":
 
 
 
-    # 进行推理并计算BLEU得分，保存注意力分析结果
+    # Perform inference and calculate BLEU score, save attention analysis results
     avg_bleu_score = inference_with_analysis(
         model,
         val_dataloader,
         char2idx,
         idx2char,
         max_seq_length=100,
-        save_dir='/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/corr_draw'  # 保存注意力图的目录
+        save_dir='./fangyang/gp/csv/corr_draw'  # Directory to save attention plots
     )
 
     # print(f"Average BLEU score on test set: {avg_bleu_score}")

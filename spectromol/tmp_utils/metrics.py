@@ -1,3 +1,12 @@
+"""
+Metrics Module for Molecular Structure Evaluation
+
+This module provides various metrics for evaluating molecular structure prediction
+including similarity measures, fingerprint comparisons, and chemical accuracy metrics.
+
+Author: SpectroMol Team
+"""
+
 from rdkit import Chem
 from rdkit.Chem import Descriptors, rdFMCS
 from rdkit.Chem import AllChem, rdMolDescriptors
@@ -10,8 +19,17 @@ import numpy as np
 import os
 
 
-# 宏观指标函数
+# Molecular structure comparison metrics
 def normalize_smiles(s):
+    """
+    Normalize SMILES string to canonical form.
+    
+    Args:
+        s (str): Input SMILES string
+        
+    Returns:
+        str or None: Canonical SMILES string if valid, None otherwise
+    """
     mol = Chem.MolFromSmiles(s)
     if mol:
         return Chem.MolToSmiles(mol, canonical=True)
@@ -19,6 +37,16 @@ def normalize_smiles(s):
         return None
 
 def top1_accuracy(s1, s2):
+    """
+    Calculate exact match accuracy between two SMILES strings.
+    
+    Args:
+        s1 (str): Predicted SMILES string
+        s2 (str): Ground truth SMILES string
+        
+    Returns:
+        int: 1 if exact match, 0 otherwise
+    """
     norm_s1 = normalize_smiles(s1)
     norm_s2 = normalize_smiles(s2)
     if norm_s1 and norm_s2:
@@ -26,6 +54,15 @@ def top1_accuracy(s1, s2):
     return 0
 
 def get_molecular_formula(s):
+    """
+    Extract molecular formula from SMILES string.
+    
+    Args:
+        s (str): SMILES string
+        
+    Returns:
+        dict or None: Dictionary of element counts if valid, None otherwise
+    """
     mol = Chem.MolFromSmiles(s)
     if mol:
         formula = Chem.rdMolDescriptors.CalcMolFormula(mol)
@@ -35,6 +72,16 @@ def get_molecular_formula(s):
     return None
 
 def molecular_formula_accuracy(s1, s2):
+    """
+    Calculate molecular formula accuracy between two SMILES strings.
+    
+    Args:
+        s1 (str): Predicted SMILES string
+        s2 (str): Ground truth SMILES string
+        
+    Returns:
+        int: 1 if formulas match, 0 otherwise
+    """
     formula1 = get_molecular_formula(s1)
     formula2 = get_molecular_formula(s2)
     if formula1 and formula2:
@@ -42,6 +89,16 @@ def molecular_formula_accuracy(s1, s2):
     return 0
 
 def cosine_similarity(s1, s2):
+    """
+    Calculate cosine similarity between two strings based on character frequency.
+    
+    Args:
+        s1 (str): First string
+        s2 (str): Second string
+        
+    Returns:
+        float: Cosine similarity score (0.0 to 1.0)
+    """
     counter1, counter2 = Counter(s1), Counter(s2)
     intersection = set(counter1.keys()) & set(counter2.keys())
     numerator = sum([counter1[x] * counter2[x] for x in intersection])
@@ -53,31 +110,60 @@ def cosine_similarity(s1, s2):
     return numerator / denominator if denominator != 0 else 0.0
 
 def levenshtein_distance(s1, s2):
+    """
+    Calculate Levenshtein distance between two strings.
+    
+    Args:
+        s1 (str): First string
+        s2 (str): Second string
+        
+    Returns:
+        int: Levenshtein distance (number of edits required)
+    """
     m, n = len(s1), len(s2)
-    dp = [[0] * (n +1) for _ in range(m +1)]
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
 
-    for i in range(m +1):
+    for i in range(m + 1):
         dp[i][0] = i
-    for j in range(n +1):
+    for j in range(n + 1):
         dp[0][j] = j
 
-    for i in range(1, m +1):
-        for j in range(1, n +1):
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
             cost = 0 if s1[i-1] == s2[j-1] else 1
             dp[i][j] = min(
-                dp[i-1][j] +1,
-                dp[i][j-1] +1,
+                dp[i-1][j] + 1,
+                dp[i][j-1] + 1,
                 dp[i-1][j-1] + cost
             )
     return dp[m][n]
 
 def molecular_weight(s):
+    """
+    Calculate molecular weight from SMILES string.
+    
+    Args:
+        s (str): SMILES string
+        
+    Returns:
+        float or None: Molecular weight if valid, None otherwise
+    """
     mol = Chem.MolFromSmiles(s)
     if mol:
         return Descriptors.MolWt(mol)
     return None
 
 def molecular_weight_difference(s1, s2):
+    """
+    Calculate absolute molecular weight difference between two molecules.
+    
+    Args:
+        s1 (str): First SMILES string
+        s2 (str): Second SMILES string
+        
+    Returns:
+        float or None: Absolute weight difference if both valid, None otherwise
+    """
     mw1 = molecular_weight(s1)
     mw2 = molecular_weight(s2)
     if mw1 is not None and mw2 is not None:
@@ -85,6 +171,16 @@ def molecular_weight_difference(s1, s2):
     return None
 
 def get_species_counts(s, hydrogens=False):
+    """
+    Count atomic species in a molecule from SMILES string.
+    
+    Args:
+        s (str): SMILES string
+        hydrogens (bool): Whether to include hydrogen atoms
+        
+    Returns:
+        dict: Dictionary of element counts
+    """
     mol = Chem.MolFromSmiles(s)
     species_counts = defaultdict(int)
     if mol:

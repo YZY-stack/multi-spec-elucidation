@@ -1,6 +1,16 @@
+"""
+Molecular Inference Module
+
+This module provides inference capabilities for the trained molecular transformer model.
+It includes SMILES generation, beam search, and molecular property prediction functionality.
+
+Author: ms_mol2mol Team
+"""
+
 import os
 import math
 import random
+from typing import List, Dict, Tuple, Optional, Union
 import pandas as pd
 from tqdm import tqdm
 import torch
@@ -11,107 +21,116 @@ RDLogger.DisableLog('rdApp.*')
 from model import *
 from utils import *
 
-# -------------------------------
-# 模型与词表定义
-# -------------------------------
+# ============================
+# Model and Vocabulary Definitions
+# ============================
 
-# 定义 SMILES 词表（与训练时一致）
+# Define SMILES vocabulary (consistent with training)
 SMILES_VOCAB = [
-    # 特殊 Token
+    # Special tokens
     '<PAD>', '<SOS>', '<EOS>', '<UNK>', '<MASK>',
     
-    # 原子符号（基础）
+    # Basic atomic symbols
     'C', 'N', 'O', 'F',
     
-    # 带电原子形式（示例补充）
+    # Charged atomic forms (example extensions)
     '[C]', '[CH]', '[CH2]', '[CH3]', 
     '[N+]', '[N-]', '[NH+]', '[NH2+]', '[NH3+]',
     '[O-]', '[OH+]',
     
-    # 化学符号
+    # Chemical symbols
     '(', ')', '[', ']', '=', '#', '-', '+', '/', '\\',
     
-    # 环闭标记（两位数）
+    # Ring closure markers (two digits)
     *[f'%{i}' for i in range(10, 100)],
     
-    # 数字（0-9 和 10-99）
+    # Numbers (0-9 and 10-99)
     *[str(i) for i in range(100)],
     
-    # 补充常见同位素标记
+    # Common isotope markers
     '[13C]', '[14C]', '[15N]'
 ]
-
-#print(SMILES_VOCAB)
 
 vocab_size = len(SMILES_VOCAB)
 char2idx = {token: idx for idx, token in enumerate(SMILES_VOCAB)}
 idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
-# atom_type 维度根据 compute_atom_types("C") 的长度
+
+# Atom type dimension based on compute_atom_types("C") length
 atom_type_dim = len(compute_atom_types("C"))
 
 
 
 
-# -------------------------------
-# 3. 定义用于自回归生成的辅助函数
-# -------------------------------
-def generate_smiles(model, src_seq, atom_types, max_length, char2idx, additional_info, device):
+# ============================
+# Autoregressive Generation Helper Functions
+# ============================
+
+def generate_smiles(model: nn.Module, src_seq: torch.Tensor, atom_types: torch.Tensor, 
+                   max_length: int, char2idx: Dict[str, int], additional_info: List[int], 
+                   device: torch.device) -> List[int]:
     """
-    采用贪心解码策略生成完整 SMILES 序列：
-      - src_seq: [1, seq_len]，为 mask 后的 SMILES 索引序列
-      - atom_types: [1, atom_type_dim]，原始 SMILES 对应的 atom type 特征
-      - max_length: 生成序列最大长度（不含 <SOS>）
-      - additional_info: [max_C, max_N, max_O, max_F]，每个原子允许的最大数量
-    返回生成的 token 索引列表（不含初始的 <SOS>）。
+    Generate complete SMILES sequence using greedy decoding strategy.
+    
+    Args:
+        model (nn.Module): Trained transformer model
+        src_seq (torch.Tensor): [1, seq_len] masked SMILES index sequence
+        atom_types (torch.Tensor): [1, atom_type_dim] atomic features for original SMILES
+        max_length (int): Maximum generation length (excluding <SOS>)
+        char2idx (Dict[str, int]): Character to index mapping
+        additional_info (List[int]): [max_C, max_N, max_O, max_F] maximum atom counts
+        device (torch.device): Computation device
+        
+    Returns:
+        List[int]: Generated token indices (excluding initial <SOS>)
     """
     model.eval()
     with torch.no_grad():
-        # 1. Encoder 部分
+        # 1. Encoder processing
         src_emb = model.embedding(src_seq) * math.sqrt(model.d_model)
         src_emb = model.pos_encoder(src_emb)
-        # Transformer Encoder 要求输入 shape 为 [seq_len, batch, d_model]
+        # Transformer Encoder requires input shape [seq_len, batch, d_model]
         src_emb = src_emb.transpose(0, 1)  # [seq_len, 1, d_model]
         memory = model.encoder(src_emb)      # [seq_len, 1, d_model]
 
-        # 2. Decoder 部分初始设置：以 <SOS> 开始
+        # 2. Decoder initialization: start with <SOS>
         input_tgt = torch.tensor([[char2idx['<SOS>']]], device=device)  # [1, 1]
 
         for _ in range(max_length):
-            # 当前 decoder 输入 embedding 与位置编码，shape: [tgt_len, 1, d_model]
+            # Current decoder input embedding with positional encoding
             tgt_emb = model.embedding(input_tgt) * math.sqrt(model.d_model)
             tgt_emb = model.pos_encoder(tgt_emb)
             tgt_emb = tgt_emb.transpose(0, 1)  # [tgt_len, 1, d_model]
 
-            # 利用 atom type 特征计算 decoder 初始 token
+            # Compute decoder initial token using atom type features
             atom_emb = model.atom_type_proj(atom_types)  # [1, d_model]
             decoder_init = model.decoder_init_proj(atom_emb).unsqueeze(0)  # [1, 1, d_model]
 
-            # 拼接 decoder 初始 token 与当前 tgt_emb
+            # Concatenate decoder initial token with current tgt_emb
             decoder_input = torch.cat([decoder_init, tgt_emb], dim=0)  # [1+tgt_len, 1, d_model]
 
-            # 生成自回归 mask
+            # Generate autoregressive mask
             tgt_mask = nn.Transformer.generate_square_subsequent_mask(decoder_input.size(0)).to(device)
 
-            # Decoder 计算输出
+            # Decoder computation
             decoder_output = model.decoder(decoder_input, memory, tgt_mask=tgt_mask)
-            # 去掉 decoder 初始 token
+            # Remove decoder initial token
             decoder_output = decoder_output[1:, 0, :]  # [tgt_len, d_model]
 
-            # 取最后一个位置的输出，得到 logits 分布
+            # Get logits distribution from last position
             logits = model.output_linear(decoder_output[-1, :])  # [vocab_size]
 
-            # -------------------------------
-            # 根据 additional_info 限制生成原子数量
-            # -------------------------------
-            # 当前生成序列（去除 <SOS>）
+            # ============================
+            # Apply atom count constraints based on additional_info
+            # ============================
+            # Current generation sequence (excluding <SOS>)
             current_tokens = input_tgt.squeeze(0).tolist()[1:]
-            # 统计各原子数量（注意此处假设 'C','N','O','F' 在词表中对应唯一 token）
+            # Count each atom type (assuming 'C','N','O','F' correspond to unique tokens in vocabulary)
             count_C = current_tokens.count(char2idx['C'])
             count_N = current_tokens.count(char2idx['N'])
             count_O = current_tokens.count(char2idx['O'])
             count_F = current_tokens.count(char2idx['F'])
 
-            # 如果达到数量限制，则将对应 atom 的 logits 设为 -∞
+            # Set logits to -∞ for atoms that have reached their limits
             if count_C >= additional_info[0]:
                 logits[char2idx['C']] = -float('inf')
             if count_N >= additional_info[1]:
@@ -121,21 +140,20 @@ def generate_smiles(model, src_seq, atom_types, max_length, char2idx, additional
             if count_F >= additional_info[3]:
                 logits[char2idx['F']] = -float('inf')
 
-            # 选择下一个 token（采样策略增加随机性）
-            # 使用 temperature sampling
+            # Select next token (using temperature sampling for randomness)
             temperature = 1.0
             logits = logits / temperature
             probs = torch.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, 1).unsqueeze(0)  # [1, 1]
 
-            # 拼接到输入序列中
+            # Append to input sequence
             input_tgt = torch.cat([input_tgt, next_token], dim=1)
 
-            # 如果生成 <EOS>，则提前结束
+            # Early termination if <EOS> is generated
             if next_token.item() == char2idx['<EOS>']:
                 break
 
-        # 返回生成的 token 序列（去除 <SOS>）
+        # Return generated token sequence (excluding <SOS>)
         generated_tokens = input_tgt[0, 1:].tolist()
         return generated_tokens
 
@@ -180,7 +198,7 @@ def padding_or_deleting_atoms(input_smiles, input_atom_count, gt_atom_count):
                 smiles_chars.insert(pos, atom_symbol)
 
         elif diff < 0:  # 多原子 -> 删除
-            for _ in range(-diff):
+                        for _ in range(-diff):
                 positions = [idx for idx, ch in enumerate(smiles_chars) if ch == atom_symbol]
                 if positions:
                     smiles_chars.pop(random.choice(positions))
@@ -188,37 +206,55 @@ def padding_or_deleting_atoms(input_smiles, input_atom_count, gt_atom_count):
     return "".join(smiles_chars)
 
 
-def inference(input_smiles, atom_types, additional_info, model, device, max_seq_length, char2idx, idx2char, mask_prob=0.15):
+def inference(input_smiles: str, atom_types: List[float], additional_info: List[int], 
+             model: nn.Module, device: torch.device, max_seq_length: int, 
+             char2idx: Dict[str, int], idx2char: Dict[int, str], mask_prob: float = 0.15) -> Tuple[str, List[int], List[int]]:
     """
-    推理函数：
-      - 将 SMILES 转为 token 索引序列
-      - 随机 mask 掉部分 token（作为 encoder 输入）
-      - 计算 atom type 特征
-      - 利用自回归生成完整 SMILES 序列
-    返回：
-      - generated_smiles: 模型生成的 SMILES 字符串
-      - src_indices: mask 后的 token 索引序列
-      - true_indices: 原始完整 token 索引序列
+    Inference function that performs SMILES generation with masking.
+    
+    Args:
+        input_smiles (str): Input SMILES string
+        atom_types (List[float]): Atomic type features
+        additional_info (List[int]): Target atom counts [C, N, O, F]
+        model (nn.Module): Trained model
+        device (torch.device): Computation device
+        max_seq_length (int): Maximum sequence length
+        char2idx (Dict[str, int]): Character to index mapping
+        idx2char (Dict[int, str]): Index to character mapping
+        mask_prob (float): Probability of masking tokens
+        
+    Returns:
+        Tuple containing:
+        - generated_smiles: Model-generated SMILES string
+        - src_indices: Masked token index sequence
+        - true_indices: Original complete token index sequence
     """
     input_atom_count = compute_additional_info(input_smiles)
     if input_atom_count != additional_info:
         input_smiles = padding_or_deleting_atoms(input_smiles, input_atom_count, additional_info)
+    
     true_indices = smiles_to_indices(input_smiles, char2idx, max_seq_length)
     src_indices, _ = mask_smiles_indices(true_indices, char2idx['<MASK>'], char2idx, mask_prob=mask_prob)
+    
     src_tensor = torch.tensor([src_indices], dtype=torch.long, device=device)
     atom_types_tensor = torch.tensor([atom_types], dtype=torch.float32, device=device)
+    
     generated_tokens = generate_smiles(model, src_tensor, atom_types_tensor, max_length=max_seq_length, 
-                                       char2idx=char2idx, additional_info=additional_info, device=device)
+                                      char2idx=char2idx, additional_info=additional_info, device=device)
     generated_smiles = decode_indices(generated_tokens, idx2char)
+    
     return generated_smiles, src_indices, true_indices
 
 
-
-def compute_additional_info(smiles):
+def compute_additional_info(smiles: str) -> List[int]:
     """
-    计算给定 SMILES 分子中 C、N、O、F 四种原子的个数，
-    返回一个列表，顺序为 [C, N, O, F]。
-    若 SMILES 无法解析，则返回 [0, 0, 0, 0]。
+    Compute counts of C, N, O, F atoms in a given SMILES molecule.
+    
+    Args:
+        smiles (str): SMILES string representation
+        
+    Returns:
+        List[int]: Atom counts in order [C, N, O, F]. Returns [0, 0, 0, 0] if SMILES cannot be parsed.
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -232,15 +268,19 @@ def compute_additional_info(smiles):
     return [count_C, count_N, count_O, count_F]
 
 
-
-
-def compute_atom_count(smiles):
+def compute_atom_count(smiles: str) -> Dict[str, int]:
     """
-    计算 SMILES 字符串中 C, N, O, F 的数量
+    Calculate counts of C, N, O, F atoms in SMILES string.
+    
+    Args:
+        smiles (str): SMILES string representation
+        
+    Returns:
+        Dict[str, int]: Dictionary with atom counts for C, N, O, F
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        # 如果 RDKit 解析失败，直接使用字符串方法统计 C、N、O、F 的数量
+        # If RDKit parsing fails, use string-based counting
         count_C = smiles.count('C')
         count_N = smiles.count('N')
         count_O = smiles.count('O')
@@ -257,19 +297,18 @@ def compute_atom_count(smiles):
     return atom_count
 
 
-
-# -------------------------------
-# 5. 推理主函数
-# -------------------------------
+# ============================
+# Main Inference Function
+# ============================
 if __name__ == '__main__':
     
-    infer_one_sample = False  # 是否进行单个样本推理，否则进行批量推理
+    infer_one_sample = False  # Whether to perform single sample inference or batch inference
     
-    # 若有 GPU 则使用 GPU，否则使用 CPU
+    # Use GPU if available, otherwise CPU
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # 超参数设置（与训练时保持一致）
+    # Hyperparameter settings (consistent with training)
     max_seq_length = 400
     d_model = 512
     nhead = 8
@@ -278,7 +317,7 @@ if __name__ == '__main__':
     dim_feedforward = 2048
     dropout = 0.1
 
-    # 实例化模型，并加载预训练权重
+    # Instantiate model and load pretrained weights
     model = MoleculePretrainingModel(
         vocab_size, atom_type_dim, d_model=d_model, nhead=nhead,
         num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
@@ -289,7 +328,7 @@ if __name__ == '__main__':
     # 加载预训练模型权重
     #checkpoint_path = "pre_large_weights/molecule_pretraining_model_epoch7.pth"
     # checkpoint_path = "finetuned_molecule_pretraining_model_epoch10.pth"
-    checkpoint_path = "/data4/linkaiqing/sm_pretrained/repair_old_finetuned_molecule_pretraining_model_epoch10.pth"
+    checkpoint_path = "./repair_old_finetuned_molecule_pretraining_model_epoch10.pth"
     if os.path.exists(checkpoint_path):
         state_dict = torch.load(checkpoint_path, map_location=device)
         # 如果权重文件是在 DDP 下保存的，可能带有 "module." 前缀，此处需要去除
@@ -368,8 +407,8 @@ if __name__ == '__main__':
 
     else:
         # 批量推理，采样N个不同结果，去重、筛选、排序并输出csv
-        input_file = "/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/corr_draw/temperature_sampling_results.csv"
-        output_file = "/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/corr_draw/inference_topN_candidates.csv"
+        input_file = "./fangyang/gp/csv/corr_draw/temperature_sampling_results.csv"
+        output_file = "./fangyang/gp/csv/corr_draw/inference_topN_candidates.csv"
         N = 100  # 每个smiles采样N个不同结果
 
         from rdkit.Chem import AllChem

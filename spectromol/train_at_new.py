@@ -1,54 +1,45 @@
+"""
+Training script for auxiliary task learning with multi-spectral molecular data.
+"""
+
 import os
+import random
+import math
+import csv
+from collections import Counter
+from math import sqrt
+
 import torch
 import torch.nn as nn
 import torch.utils.data as data
+from torch.utils.data import DataLoader
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from model import *
-from dataset import *
+from sklearn.metrics import accuracy_score, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
-import csv
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+
 from rdkit import Chem, RDLogger, DataStructs
 from rdkit.Chem import AllChem, MACCSkeys
 from Levenshtein import distance as lev
+
+from model import *
+from dataset import *
+
+# Disable RDKit warnings
 RDLogger.DisableLog('rdApp.*')
 
-# import pickle
-# path = '/root/workspace/smiles-transformer-master/csv/output_smiles_vectors.pkl'
-# with open(path, 'rb') as f: 
-#     atom_coor_smiles = pickle.load(f)
-#     import pdb;pdb.set_trace()
-#     print('a')
-
-
-# from sm_trans.smiles_transformer.build_vocab import WordVocab
-# from sm_trans.smiles_transformer.pretrain_trfm import TrfmSeq2seq
-
-# vocab = WordVocab.load_vocab('/root/workspace/smiles-transformer-master/csv/vocab.pkl')
-# trfm = TrfmSeq2seq(len(vocab), 256, len(vocab), 4)
-# trfm.load_state_dict(torch.load('/root/workspace/smiles-transformer-master/csv/trfm_12_23000.pkl'))
-# trfm.eval()
-
+# Set device and data split mode
 device = 'cuda'
-
 data_split_mode = 'scaffold'
 
-
+# Set random seeds for reproducibility
 random.seed(42)
 np.random.seed(42)
 torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
-
-
-
-from sklearn.metrics import accuracy_score, mean_absolute_error
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-import torch.utils.data as data
-
-
-from collections import Counter
 import math
 
 
@@ -66,25 +57,28 @@ class SemanticSupervisedSMILESLoss(nn.Module):
     def forward(self, smiles_output, smiles_target, auxiliary_targets, count_task_outputs, 
                 binary_task_outputs, count_tasks, binary_tasks):
         """
-        计算总损失，包括SMILES损失和辅助任务损失
+        Calculate total loss including SMILES loss and auxiliary task losses.
         
         Args:
-            smiles_output: [seq_len * batch_size, vocab_size] - SMILES预测输出
-            smiles_target: [seq_len * batch_size] - SMILES真实标签
-            auxiliary_targets: [batch_size, num_aux_tasks] - 辅助任务真实标签
-            count_task_outputs: dict - 计数任务预测输出
-            binary_task_outputs: dict - 二元任务预测输出
-            count_tasks: list - 计数任务名称列表
-            binary_tasks: list - 二元任务名称列表
+            smiles_output: [seq_len * batch_size, vocab_size] - SMILES prediction output
+            smiles_target: [seq_len * batch_size] - SMILES ground truth labels
+            auxiliary_targets: [batch_size, num_aux_tasks] - Auxiliary task ground truth labels
+            count_task_outputs: dict - Count task prediction outputs
+            binary_task_outputs: dict - Binary task prediction outputs
+            count_tasks: list - List of count task names
+            binary_tasks: list - List of binary task names
+            
+        Returns:
+            tuple: (total_loss, smiles_loss, auxiliary_loss)
         """
-        # 主要SMILES损失
+        # Primary SMILES loss
         smiles_loss = self.smiles_loss_fn(smiles_output, smiles_target)
         
-        # 辅助任务损失
+        # Auxiliary task losses
         total_auxiliary_loss = 0.0
         num_aux_tasks = 0
         
-        # 计数任务损失 - 重点关注重要的化学特征
+        # Count task losses - focus on important chemical features
         count_loss = 0.0
         count_tasks_used = 0
         for idx, task in enumerate(count_tasks):
@@ -96,11 +90,11 @@ class SemanticSupervisedSMILESLoss(nn.Module):
                 count_tasks_used += 1
         
         if count_tasks_used > 0:
-            count_loss = count_loss / count_tasks_used  # 平均损失
+            count_loss = count_loss / count_tasks_used  # Average loss
             total_auxiliary_loss += self.count_weight * count_loss
             num_aux_tasks += 1
         
-        # 二元分类任务损失 - 结构特征
+        # Binary classification task losses - structural features
         binary_loss = 0.0
         binary_tasks_used = 0
         for idx, task in enumerate(binary_tasks):
@@ -909,7 +903,7 @@ idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 # uv
 print('load uv file...')
 uv_max_value = 15.0
-uv_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/uv.csv')
+uv_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/uv.csv')
 peak_columns = [col for col in uv_spe_filtered.columns if 'peak' in col]
 uv_spe_filtered[peak_columns] = uv_spe_filtered[peak_columns] / uv_max_value
 uv_spe_filtered = uv_spe_filtered.to_numpy()
@@ -919,7 +913,7 @@ print('uv_spe_filtered:', uv_spe_filtered.shape)
 # ir
 print('load ir file...')
 ir_max_value = 4000.0
-ir_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/ir_82.csv')
+ir_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/ir_82.csv')
 peak_columns = [col for col in ir_spe_filtered.columns if 'peak' in col]
 ir_spe_filtered[peak_columns] = ir_spe_filtered[peak_columns] / ir_max_value
 ir_spe_filtered = ir_spe_filtered.to_numpy()
@@ -930,7 +924,7 @@ print('ir_spe_filtered:', ir_spe_filtered.shape)
 print('load 1dc-nmr with dept file...')
 cnmr_max_value = 220.0
 cnmr_min_value = -10.0
-nmrc_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_cnmr_dept.csv')
+nmrc_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_cnmr_dept.csv')
 peak_columns = [col for col in nmrc_spe_filtered.columns if 'peak' in col]
 nmrc_spe_filtered[peak_columns] = (nmrc_spe_filtered[peak_columns] - cnmr_min_value) / (cnmr_max_value - cnmr_min_value)
 nmrc_spe_filtered = nmrc_spe_filtered.to_numpy()
@@ -938,7 +932,7 @@ nmrc_spe_filtered = nmrc_spe_filtered.to_numpy()
 print('load 2dc-nmr (c-c, c-x) file...')
 cnmr_2d_max_value = 450.0
 cnmr_2d_min_value = -400.0
-twoD_nmr = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_cnmr_ina_chsqc.csv')
+twoD_nmr = pd.read_csv('./gp/qm9_all_raw_spe/2d_cnmr_ina_chsqc.csv')
 peak_columns = [col for col in twoD_nmr.columns if 'peak' in col]
 twoD_nmr[peak_columns] = (twoD_nmr[peak_columns] - cnmr_2d_min_value) / (cnmr_2d_max_value - cnmr_2d_min_value)
 twoD_nmr = twoD_nmr.to_numpy()
@@ -951,7 +945,7 @@ print('nmrc_spe_filtered:', nmrc_spe_filtered.shape)
 print('load 1d h-nmr file...')
 nmrh_max_value = 12.0
 nmrh_min_value = -2.0
-nmrh_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_hnmr.csv')
+nmrh_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_hnmr.csv')
 peak_columns = [col for col in nmrh_spe_filtered.columns if 'peak' in col]
 
 # 过滤H-NMR异常值 - 先识别异常样本，但不对其归一化
@@ -969,7 +963,7 @@ nmrh_spe_filtered = nmrh_spe_filtered.to_numpy()
 # HSQC
 hsqc_max_value = 400.0
 hsqc_min_value = -350.0
-hsqc = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_hhsqc.csv')
+hsqc = pd.read_csv('./gp/qm9_all_raw_spe/2d_hhsqc.csv')
 peak_columns = [col for col in hsqc.columns if 'peak' in col]
 hsqc[peak_columns] = (hsqc[peak_columns] - hsqc_min_value) / (hsqc_max_value - hsqc_min_value)
 hsqc = hsqc.to_numpy()
@@ -978,32 +972,13 @@ hsqc = hsqc.to_numpy()
 # COSY
 cosy_max_value = 14.0
 cosy_min_value = -2.0
-nmr_cosy = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_hcosy.csv')
+nmr_cosy = pd.read_csv('./gp/qm9_all_raw_spe/2d_hcosy.csv')
 hxyh_columns = [col for col in nmr_cosy.columns if 'H_X_Y_H' in col]
 nmr_cosy = nmr_cosy[hxyh_columns]
 peak_columns = [col for col in nmr_cosy.columns if 'peak' in col]
 nmr_cosy[peak_columns] = (nmr_cosy[peak_columns] - cosy_min_value) / (cosy_max_value - cosy_min_value)
 nmr_cosy = nmr_cosy.to_numpy()
 
-# # J2D
-# j2d_max_value = 30.0
-# j2d_min_value = -30.0
-# j2d = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_h_j2d.csv')
-# j2d_columns = [col for col in j2d.columns if 'coupling' in col]
-# j2d = j2d[j2d_columns]
-
-# # 过滤J2D异常值 - 正确检测异常值
-# print('Filtering J2D samples with abnormal values...')
-# j2d_max_values = j2d[j2d_columns].abs().max(axis=1)
-# j2d_abnormal_mask = j2d_max_values > threshold
-# j2d_abnormal_indices = set(np.where(j2d_abnormal_mask)[0])
-
-# # 使用设定的min和max值进行归一化
-# j2d[j2d_columns] = (j2d[j2d_columns] - j2d_min_value) / (j2d_max_value - j2d_min_value)
-# j2d = j2d.to_numpy()
-
-# 合并所有异常样本索引
-# all_abnormal_indices = h_nmr_abnormal_indices.union(j2d_abnormal_indices)
 all_abnormal_indices = h_nmr_abnormal_indices
 all_abnormal_indices = sorted(list(all_abnormal_indices))
 print(f"Found {len(all_abnormal_indices)} samples with abnormal values (> {threshold})")
@@ -1017,7 +992,7 @@ print('load x-nmr file...')
 # F-NMR
 fnmr_max_value = 0.0001
 fnmr_min_value = -400.0
-nmrf_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_fnmr.csv')
+nmrf_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_fnmr.csv')
 peak_columns = [col for col in nmrf_spe_filtered.columns if 'peak' in col]
 nmrf_spe_filtered[peak_columns] = (nmrf_spe_filtered[peak_columns] - fnmr_min_value) / (fnmr_max_value - fnmr_min_value)
 nmrf_spe_filtered = nmrf_spe_filtered.to_numpy()
@@ -1025,7 +1000,7 @@ nmrf_spe_filtered = nmrf_spe_filtered.to_numpy()
 # N-NMR  
 nnmr_max_value = 400.0
 nnmr_min_value = -260.0
-nmrn_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_nnmr.csv')
+nmrn_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_nnmr.csv')
 peak_columns = [col for col in nmrn_spe_filtered.columns if 'peak' in col]
 nmrn_spe_filtered[peak_columns] = (nmrn_spe_filtered[peak_columns] - nnmr_min_value) / (nnmr_max_value - nnmr_min_value)
 nmrn_spe_filtered = nmrn_spe_filtered.to_numpy()
@@ -1033,7 +1008,7 @@ nmrn_spe_filtered = nmrn_spe_filtered.to_numpy()
 # O-NMR
 onmr_max_value = 460.0
 onmr_min_value = -385.0
-nmro_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_onmr.csv')
+nmro_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_onmr.csv')
 peak_columns = [col for col in nmro_spe_filtered.columns if 'peak' in col]
 nmro_spe_filtered[peak_columns] = (nmro_spe_filtered[peak_columns] - onmr_min_value) / (onmr_max_value - onmr_min_value)
 nmro_spe_filtered = nmro_spe_filtered.to_numpy()
@@ -1047,7 +1022,7 @@ print('nmrh_spe_filtered:', nmrh_spe_filtered.shape)
 
 # zhipu
 print('load high-mass file...')
-mass = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/ms.csv')
+mass = pd.read_csv('./gp/qm9_all_raw_spe/ms.csv')
 high_mass_spe = mass.to_numpy()
 print('high-mass_spe:', high_mass_spe.shape)
 
@@ -1058,7 +1033,7 @@ print(f"Atom type shape: {atom_type.shape}")
 
 
 # smiles
-smiles_list = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/smiles.csv').values.tolist() ### [[smiles1], [smiles2], ...]
+smiles_list = pd.read_csv('./gp/qm9_all_raw_spe/smiles.csv').values.tolist() ### [[smiles1], [smiles2], ...]
 smiles_lengths = [len(smiles[0]) for smiles in smiles_list]
 max_smiles_length = max(smiles_lengths)
 max_seq_length = max_smiles_length + 2
@@ -1068,8 +1043,8 @@ print(f"模型中应使用的 max_seq_length 为：{max_seq_length}")
 
 # 获取所有辅助任务
 # # Get the list of columns
-# # auxiliary_data = pd.read_csv('/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task_canonical.csv')
-# auxiliary_data = pd.read_csv('/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task.csv')
+# # auxiliary_data = pd.read_csv('./fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task_canonical.csv')
+# auxiliary_data = pd.read_csv('./fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task.csv')
 # columns = auxiliary_data.columns.tolist()
 # # Exclude 'smiles' and 'id' columns to get auxiliary tasks
 # auxiliary_tasks = [col for col in columns if col not in ['smiles', 'id']]
@@ -1078,10 +1053,10 @@ print(f"模型中应使用的 max_seq_length 为：{max_seq_length}")
 
 
 # file_prefixes = {
-#     "c_nmr": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/C_NMR_TA.csv',
-#     "h_nmr": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/H_NMR_TA.csv',
-#     # "ir": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/IR_TA.csv',
-#     "ms": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/MS_TA.csv',
+#     "c_nmr": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/C_NMR_TA.csv',
+#     "h_nmr": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/H_NMR_TA.csv',
+#     # "ir": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/IR_TA.csv',
+#     "ms": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/MS_TA.csv',
 # }
 # auxiliary_data = pd.DataFrame()
 # for prefix, filepath in file_prefixes.items():
@@ -1090,7 +1065,7 @@ print(f"模型中应使用的 max_seq_length 为：{max_seq_length}")
 #     auxiliary_data = pd.concat([auxiliary_data, df], axis=1)
 
 
-auxiliary_data = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
+auxiliary_data = pd.read_csv('./gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
 
 
 columns = auxiliary_data.columns.tolist()
@@ -1128,9 +1103,9 @@ def get_indices(smiles_series, smiles_to_index):
     
 
 # 先读取数据集划分文件
-train_df = pd.read_csv(f'/data4/linkaiqing/sm_pretrained/gp/csv/dataset/{data_split_mode}/train.csv')
-val_df = pd.read_csv(f'/data4/linkaiqing/sm_pretrained/gp/csv/dataset/{data_split_mode}/val.csv')
-test_df = pd.read_csv(f'/data4/linkaiqing/sm_pretrained/gp/csv/dataset/{data_split_mode}/test.csv')
+train_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/train.csv')
+val_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/val.csv')
+test_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/test.csv')
 
 # 如果有异常样本，先从数据划分文件中移除对应的SMILES
 if len(all_abnormal_indices) > 0:
@@ -1347,7 +1322,7 @@ def load_model(model_path, vocab_size, char2idx):
 # model.apply(init_weights)
 
  # 定义模型文件路径
-model_path = '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/weights_scaffold_at/0806_ft.pth'
+model_path = './fangyang/gp/csv/weights_scaffold_at/0806_ft.pth'
 
 # 加载模型
 model = load_model(model_path, vocab_size, char2idx)
@@ -1391,7 +1366,7 @@ if use_semantic_supervision:
         train_dataloader,
         val_dataloader,
         epochs=1000,
-        save_dir=f'/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/weights_{data_split_mode}_semantic',
+        save_dir=f'./fangyang/gp/csv/weights_{data_split_mode}_semantic',
         use_adaptive_weight=True  # 使用自适应权重调整
     )
 else:
@@ -1404,5 +1379,5 @@ else:
         train_dataloader,
         val_dataloader,
         epochs=1000,
-        save_dir=f'/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/weights_{data_split_mode}_original'
+        save_dir=f'./fangyang/gp/csv/weights_{data_split_mode}_original'
     )

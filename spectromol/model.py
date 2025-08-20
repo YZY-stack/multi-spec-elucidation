@@ -1,21 +1,34 @@
+"""
+Model definitions for multi-spectral molecular property prediction and SMILES generation.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import copy
+
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
 
-
 class SMILESLoss(nn.Module):
+    """Loss function for SMILES sequence generation."""
+    
     def __init__(self, ignore_index):
         super(SMILESLoss, self).__init__()
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=ignore_index)
     
     def forward(self, output, target):
         """
-        output: [seq_len, batch_size, vocab_size]
-        target: [seq_len, batch_size]
+        Forward pass for SMILES loss calculation.
+        
+        Args:
+            output: Model output [seq_len, batch_size, vocab_size]
+            target: Target sequences [seq_len, batch_size]
+            
+        Returns:
+            Computed loss value
         """
         output = output.reshape(-1, output.size(-1))  # [seq_len * batch_size, vocab_size]
         target = target.reshape(-1)  # [seq_len * batch_size]
@@ -23,18 +36,28 @@ class SMILESLoss(nn.Module):
         return loss
 
 
-
-
-import copy
 class CustomTransformerEncoder(nn.Module):
+    """Custom transformer encoder with attention weight output."""
+    
     def __init__(self, encoder_layer, num_layers):
         super(CustomTransformerEncoder, self).__init__()
         self.layers = nn.ModuleList([copy.deepcopy(encoder_layer) for _ in range(num_layers)])
         self.num_layers = num_layers
 
     def forward(self, src, mask=None, src_key_padding_mask=None):
+        """
+        Forward pass through transformer encoder layers.
+        
+        Args:
+            src: Source input tensor
+            mask: Attention mask
+            src_key_padding_mask: Key padding mask
+            
+        Returns:
+            Tuple of (output, attention_weights)
+        """
         output = src
-        attentions = []  # To store attention weights from each layer
+        attentions = []  # Store attention weights from each layer
 
         for mod in self.layers:
             output, attn_weights = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
@@ -44,10 +67,12 @@ class CustomTransformerEncoder(nn.Module):
 
 
 class CustomTransformerEncoderLayer(nn.Module):
+    """Custom transformer encoder layer with attention weight output."""
+    
     def __init__(self, d_model, nhead, **kwargs):
         super(CustomTransformerEncoderLayer, self).__init__()
         self.self_attn = nn.MultiheadAttention(d_model, nhead, **kwargs)
-        # The rest of the components (feedforward network, layer norms, etc.)
+        # Feedforward network components
         self.linear1 = nn.Linear(d_model, d_model * 4)
         self.dropout = nn.Dropout(0.1)
         self.linear2 = nn.Linear(d_model * 4, d_model)
@@ -79,37 +104,45 @@ class CustomTransformerEncoderLayer(nn.Module):
 
 
 class AtomPredictionModel(nn.Module):
+    """
+    Multi-modal spectral data to molecular structure prediction model.
+    
+    This model takes various spectral inputs (IR, UV, NMR, Mass Spec) and predicts
+    molecular structures represented as SMILES strings. It uses a transformer-based
+    architecture with custom tokenization for spectral data.
+    
+    Args:
+        vocab_size (int): Size of SMILES vocabulary
+        count_tasks_classes (dict): Dictionary of count-based auxiliary tasks and their class counts
+        binary_tasks (list): List of binary auxiliary task names
+    """
+    
     def __init__(self, vocab_size, count_tasks_classes, binary_tasks):
         super(AtomPredictionModel, self).__init__()
         self.d_model = 128  # Embedding dimension
-        self.num_spectra = 8  # ir, uv, nmr_c, nmr_h, f_spectrum, n_spectrum, mass_low, mass_high
+        self.num_spectra = 8  # Number of different spectral modalities
 
-        # Define feature dimensions per spectrum
+        # Define feature dimensions for each spectral modality
         feature_dims = {
-            'ir': 82,
-            'uv': 10,
-            # 'nmr_c': 28,  # 298: 28+180+90
-            'nmr_c': 207,  # 298: 28+180
-            # 'nmr_c': 298,  # 298: 28+180+90
-            # 'nmr_h': 105, # 1d only
-            # 'nmr_h': 225, # 1d + HSQC
-            # 'nmr_h': 405, # 1d + HSQC + COSY
-            'nmr_h': 382, # 1d + HSQC + COSY + J2d
-            'f_spectrum': 12,
-            'n_spectrum': 14,
-            'o_spectrum': 12,
-            # 'mass_low': 100,
-            'mass_high': 7
+            'ir': 82,              # Infrared spectrum features
+            'uv': 10,              # UV-Vis spectrum features  
+            'nmr_c': 207,          # Carbon-13 NMR features (28+180)
+            'nmr_h': 382,          # Proton NMR features (1D + HSQC + COSY + J2D)
+            'f_spectrum': 12,      # Fluorine spectrum features
+            'n_spectrum': 14,      # Nitrogen spectrum features
+            'o_spectrum': 12,      # Oxygen spectrum features
+            'mass_high': 7         # High-resolution mass spectrum features
         }
 
+        # Initialize components
         max_feature_positions = max(feature_dims.values())  # Maximum number of features per spectrum
         self.tokenizer = Tokenizer(feature_dims, self.d_model, max_feature_positions, self.num_spectra)
 
-        # Custom Transformer encoder
+        # Custom Transformer encoder for spectral feature processing
         encoder_layer = CustomTransformerEncoderLayer(d_model=self.d_model, nhead=1)
         self.transformer_encoder = CustomTransformerEncoder(encoder_layer, num_layers=1)
 
-        # SMILES decoder
+        # SMILES decoder for molecular structure generation
         self.smiles_decoder = SMILESEncoderDecoder(d_model=self.d_model, vocab_size=vocab_size, num_atom_types=5)
 
 

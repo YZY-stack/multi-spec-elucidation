@@ -1,15 +1,27 @@
+"""
+Molecular Fine-tuning Module
+
+This module implements fine-tuning capabilities for the transformer-based molecular 
+representation model. It includes distributed training support, dynamic gradient clipping,
+and advanced learning rate scheduling for optimal performance.
+
+Author: ms_mol2mol Team
+"""
+
 import os
 os.environ['CUDA_VISIBLE_DEVICES']='0,1,2,3,4,5,6,7'
 import re
 import math
 import random
 import lmdb
+from typing import List, Dict, Tuple, Optional
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 import torch
-torch.autograd.set_detect_anomaly(True)          # ★① 打开异常链路
+torch.autograd.set_detect_anomaly(True)  # Enable anomaly detection for debugging
 import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
@@ -21,9 +33,6 @@ from rdkit.Chem import AllChem, DataStructs
 from rdkit import Chem, RDLogger
 RDLogger.DisableLog('rdApp.*')
 
-
-
-import re
 import torch
 import pandas as pd
 from torch.utils.data import Dataset
@@ -31,11 +40,11 @@ from tqdm import tqdm
 from rdkit import Chem
 
 
-MASK_TOKEN = "<MASK>"                 # ★确保已加入 vocab
+MASK_TOKEN = "<MASK>"  # Ensure this token is added to vocabulary
 
 
 # ============================
-# Tokenizer 与数据预处理工具函数（只针对 C, N, O, F）
+# SMILES Tokenizer and Data Preprocessing (Enhanced for C, N, O, F plus additional elements)
 # ============================
 # def tokenize_smiles(smiles):
 #     pattern = r'''
@@ -50,27 +59,49 @@ MASK_TOKEN = "<MASK>"                 # ★确保已加入 vocab
 #     token_list = [next(filter(None, t)).strip() for t in tokens if any(t)]
 #     return token_list
 
-def tokenize_smiles(smiles):
-    # ★ updated: 扩充元素集合，注意先匹配多字符（Br/Cl）
+def tokenize_smiles(smiles: str) -> List[str]:
+    """
+    Enhanced SMILES tokenizer supporting expanded element set.
+    
+    Matches multi-character elements (Br/Cl) first, then single characters.
+    Supports bracketed atoms, ring closures, and chemical bonds.
+    
+    Args:
+        smiles (str): SMILES string representation
+        
+    Returns:
+        List[str]: List of chemical tokens
+    """
+    # Enhanced pattern: matches special tokens, bracketed atoms, multi-char elements first
     pattern = r'''(<[A-Z]+>)|(\[[^\]]+])|(%\d{2})|(Br|Cl)|([BCNOFHPSI])|(\d+)|([=#\-\+\(\)/\\])'''
     tokens = re.findall(pattern, smiles, re.VERBOSE)
     return [next(filter(None, t)).strip() for t in tokens if any(t)]
 
-def smiles_to_indices(smiles: str, char2idx: dict, max_length: int):
+def smiles_to_indices(smiles: str, char2idx: Dict[str, int], max_length: int) -> Optional[List[int]]:
     """
-    - 空串 或 token 列表为空 ⇒ 返回 None 让 Dataset 重抽
-    - 其余未知 token 统统映射到 <UNK>，绝不再返回 None
+    Convert SMILES string to token indices with robust error handling.
+    
+    Returns None for empty strings or empty token lists to trigger dataset resampling.
+    Unknown tokens are mapped to <UNK> instead of causing failures.
+    
+    Args:
+        smiles (str): SMILES string
+        char2idx (Dict[str, int]): Character to index mapping
+        max_length (int): Maximum sequence length
+        
+    Returns:
+        Optional[List[int]]: Token indices or None if invalid
     """
     if not isinstance(smiles, str) or len(smiles.strip()) == 0:
         return None
 
     tokens = tokenize_smiles(smiles)
     if len(tokens) == 0:
-        return None                       # 真正空 token 才算失败
+        return None  # Only empty tokens count as failure
 
     indices = [char2idx['<SOS>']]
     for t in tokens:
-        indices.append(char2idx.get(t, char2idx['<UNK>']))   # 映射未知
+        indices.append(char2idx.get(t, char2idx['<UNK>']))  # Map unknown tokens
     indices.append(char2idx['<EOS>'])
 
     if len(indices) < max_length:
@@ -84,69 +115,71 @@ def smiles_to_indices(smiles: str, char2idx: dict, max_length: int):
 
 
 # ============================
-# 2. Atom-type 特征计算（使用 rdkit）
+# Atom-type Feature Calculation (Using RDKit)
 # ============================
 from rdkit import Chem
 from rdkit.Chem import Descriptors
 
-# # 定义前五周期原子量表
-# atomic_weights = {
-#     "H": 1.007825,
-#     "He": 4.002603,
-#     "Li": 7.016004,
-#     "Be": 9.012182,
-#     "B": 11.009305,
-#     "C": 12.000000,
-#     "N": 14.003074,
-#     "O": 15.994915,
-#     "F": 18.998403,
-#     "Ne": 19.992440,
-#     "Na": 22.989770,
-#     "Mg": 23.985042,
-#     "Al": 26.981538,
-#     "Si": 27.976926,
-#     "P": 30.973762,
-#     "S": 31.972071,
-#     "Cl": 34.968853,
-#     "Ar": 39.962383,
-#     "K": 38.963707,
-#     "Ca": 39.962591,
-#     "Sc": 44.955911,
-#     "Ti": 47.947947,
-#     "V": 50.943964,
-#     "Cr": 51.940506,
-#     "Mn": 54.938045,
-#     "Fe": 55.934937,
-#     "Co": 58.933199,
-#     "Ni": 57.935346,
-#     "Cu": 62.929601,
-#     "Zn": 63.929142,
-#     "Ga": 68.925581,
-#     "Ge": 73.921178,
-#     "As": 74.921595,
-#     "Se": 79.916521,
-#     "Br": 78.918337,
-#     "Kr": 83.911507,
-#     "Rb": 84.911789,
-#     "Sr": 87.905612,
-#     "Y": 88.905848,
-#     "Zr": 89.904704,
-#     "Nb": 92.906378,
-#     "Mo": 97.905408,
-#     "Tc": 97.907212,
-#     "Ru": 101.904349,
-#     "Rh": 102.905504,
-#     "Pd": 105.903486,
-#     "Ag": 106.905097,
-#     "Cd": 105.906459,
-#     "In": 112.904061,
-#     "Sn": 111.904824,
-#     "Sb": 120.903815,
-#     "Te": 127.904461,
-#     "I": 126.904468,
-#     "Xe": 128.904779
-# }
 
+# Atomic weights for first five periods
+atomic_weights = {
+    "H": 1.007825,
+    "He": 4.002603,
+    "Li": 7.016004,
+    "Be": 9.012182,
+    "B": 11.009305,
+    "C": 12.000000,
+    "N": 14.003074,
+    "O": 15.994915,
+    "F": 18.998403,
+    "Ne": 19.992440,
+    "Na": 22.989770,
+    "Mg": 23.985042,
+    "Al": 26.981538,
+    "Si": 27.976926,
+    "P": 30.973762,
+    "S": 31.972071,
+    "Cl": 34.968853,
+    "Ar": 39.962383,
+    "K": 38.963707,
+    "Ca": 39.962591,
+    "Sc": 44.955911,
+    "Ti": 47.947947,
+    "V": 50.943964,
+    "Cr": 51.940506,
+    "Mn": 54.938045,
+    "Fe": 55.934937,
+    "Co": 58.933199,
+    "Ni": 57.935346,
+    "Cu": 62.929601,
+    "Zn": 63.929142,
+    "Ga": 68.925581,
+    "Ge": 73.921178,
+    "As": 74.921595,
+    "Se": 79.916521,
+    "Br": 78.918337,
+    "Kr": 83.911507,
+    "Rb": 84.911789,
+    "Sr": 87.905612,
+    "Y": 88.905848,
+    "Zr": 89.904704,
+    "Nb": 92.906378,
+    "Mo": 97.905408,
+    "Tc": 97.907212,
+    "Ru": 101.904349,
+    "Rh": 102.905504,
+    "Pd": 105.903486,
+    "Ag": 106.905097,
+    "Cd": 105.906459,
+    "In": 112.904061,
+    "Sn": 111.904824,
+    "Sb": 120.903815,
+    "Te": 127.904461,
+    "I": 126.904468,
+    "Xe": 128.904779
+}
+
+# Common elements subset for focused analysis
 atomic_weights = {
     "H": 1.007825,
     "B": 11.009305,
@@ -179,37 +212,49 @@ atomic_weights = {
 #     return mol_weight
 
 
-ptable = Chem.GetPeriodicTable()              # RDKit 内部周期表
+ptable = Chem.GetPeriodicTable()  # RDKit internal periodic table
 
 def calculate_mol_weight_custom(mol: Chem.Mol) -> float:
     """
-    用 RDKit 周期表逐原子累加精确原子量。
-    任何异常情况一律返回 0.0，避免 NaN。
+    Calculate precise molecular weight using RDKit periodic table.
+    Returns 0.0 for any exception to avoid NaN values.
+    
+    Args:
+        mol (Chem.Mol): RDKit molecule object
+        
+    Returns:
+        float: Molecular weight or 0.0 if calculation fails
     """
     if mol is None:
         return 0.0
 
-    w = 0.0
+    weight = 0.0
     for atom in mol.GetAtoms():
         try:
-            w += ptable.GetAtomicWeight(atom.GetAtomicNum())
-        except Exception:                      # 极少数非常规元素
-            w += 0.0
-    return w
+            weight += ptable.GetAtomicWeight(atom.GetAtomicNum())
+        except Exception:  # Handle unusual elements
+            weight += 0.0
+    return weight
 
 
-def calculate_dbe(mol):
+def calculate_dbe(mol: Chem.Mol) -> int:
     """
-    计算分子的 DBE（Degree of Unsaturation）：
-      DBE = (2*C + 2 + N - (H + X)) / 2
-    其中 C、N、H、X 分别为碳、氮、氢和卤素原子数
+    Calculate Degree of Unsaturation (DBE) for a molecule.
+    DBE = (2*C + 2 + N - (H + X)) / 2
+    where C, N, H, X are counts of carbon, nitrogen, hydrogen, and halogen atoms.
+    
+    Args:
+        mol (Chem.Mol): RDKit molecule object
+        
+    Returns:
+        int: Degree of unsaturation
     """
-    C = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == 'C')
-    N = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == 'N')
-    H = sum(atom.GetTotalNumHs() for atom in mol.GetAtoms())
+    carbon_count = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == 'C')
+    nitrogen_count = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == 'N')
+    hydrogen_count = sum(atom.GetTotalNumHs() for atom in mol.GetAtoms())
     halogens = {'F', 'Cl', 'Br', 'I'}
-    X = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() in halogens)
-    dbe = (2 * C + 2 + N - (H + X)) / 2
+    halogen_count = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() in halogens)
+    dbe = (2 * carbon_count + 2 + nitrogen_count - (hydrogen_count + halogen_count)) / 2
     return int(dbe)
 
 # def compute_atom_types(smiles):
@@ -232,56 +277,72 @@ def calculate_dbe(mol):
 #     return [float(dbe), mol_weight] + counts
 
 
-def compute_atom_types(smiles: str):
+def compute_atom_types(smiles: str) -> List[float]:
     """
-    返回长度 = 2 + len(atomic_weights) 的特征向量：
-    [DBE, log(mol_w + 1)] + 各元素计数
-    —— 所有分量都保证 finite。
+    Compute atomic features for a molecule including DBE, molecular weight, and element counts.
+    
+    Returns a feature vector of length = 2 + len(atomic_weights):
+    [DBE, log(mol_weight + 1)] + element counts (log-normalized)
+    All components are guaranteed to be finite values.
+    
+    Args:
+        smiles (str): SMILES string representation
+        
+    Returns:
+        List[float]: Feature vector with DBE, log molecular weight, and element counts
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return [0.0] * (2 + len(atomic_weights))
 
-    # ---- DBE ----
+    # Calculate DBE (Degree of Unsaturation)
     dbe = calculate_dbe(mol)
 
-    # ---- 精确分子量（对数）----
-    mol_w = calculate_mol_weight_custom(Chem.AddHs(mol))
-    mol_w = math.log1p(mol_w) if mol_w > 0 else 0.0   # 避免 log(0)
+    # Calculate precise molecular weight (log-normalized)
+    mol_weight = calculate_mol_weight_custom(Chem.AddHs(mol))
+    log_mol_weight = math.log1p(mol_weight) if mol_weight > 0 else 0.0  # Avoid log(0)
 
-    # ---- 元素计数 ----
-    counts = []
-    for elem in atomic_weights.keys():
-        cnt = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == elem)
-        # ---   ↓↓↓ 归一化改动开始  ↓↓↓   ---
-        counts.append(math.log1p(cnt))           ### MOD ###
-        # 若想用线性缩放就改成  counts.append(cnt / 20.0)
-        # ---   ↑↑↑ 归一化改动结束  ↑↑↑   ---
-    return [float(dbe), mol_w] + counts
+    # Calculate element counts (log-normalized for better distribution)
+    element_counts = []
+    for element in atomic_weights.keys():
+        count = sum(1 for atom in mol.GetAtoms() if atom.GetSymbol() == element)
+        element_counts.append(math.log1p(count))  # Log normalization
+        
+    return [float(dbe), log_mol_weight] + element_counts
 
 
+def _has_bad_values(tensor: torch.Tensor) -> bool:
+    """Check if tensor contains NaN or Inf values."""
+    return tensor is not None and (torch.isnan(tensor).any() or torch.isinf(tensor).any())
 
-def _has_bad(t):
-    return t is not None and (torch.isnan(t).any() or torch.isinf(t).any())
 
-def catch_nan(model):                            # ★② 覆盖旧函数
+def catch_nan(model: torch.nn.Module) -> bool:
     """
-    检查参数或梯度里是否含 NaN / Inf。
-    返回 True 表示已发现异常。
+    Check model parameters and gradients for NaN/Inf values.
+    
+    Args:
+        model (torch.nn.Module): Model to check
+        
+    Returns:
+        bool: True if NaN/Inf values found, False otherwise
     """
-    for n, p in model.named_parameters():
-        if _has_bad(p):
-            print(f'★ param NaN/Inf -> {n}')
+    for name, param in model.named_parameters():
+        if _has_bad_values(param):
+            print(f'★ Parameter NaN/Inf detected in: {name}')
             return True
-        if _has_bad(p.grad):
-            print(f'★ grad  NaN/Inf -> {n}')
+        if _has_bad_values(param.grad):
+            print(f'★ Gradient NaN/Inf detected in: {name}')
             return True
     return False
 
 
-
-# ========= Imports =========
-import random, functools, glob, re
+# ============================
+# Data Augmentation Functions
+# ============================
+import random
+import functools
+import glob
+import re
 from typing import List, Tuple
 
 import torch
@@ -290,24 +351,41 @@ from torch.utils.data import Dataset
 from rdkit import Chem
 from rdkit.Chem import AllChem, BRICS
 
-# ---------- 通用工具 ----------
-def sanitize_or_fallback(mol, fallback: str) -> str:
-    """尝试输出 Kekule SMILES；失败则回退原串"""
+
+def sanitize_or_fallback(mol: Chem.Mol, fallback: str) -> str:
+    """
+    Attempt to generate Kekule SMILES; fallback to original string on failure.
+    
+    Args:
+        mol (Chem.Mol): RDKit molecule object
+        fallback (str): Fallback SMILES string
+        
+    Returns:
+        str: Kekule SMILES or fallback string
+    """
     try:
         Chem.SanitizeMol(mol)
-        res = Chem.MolToSmiles(mol, canonical=False, kekuleSmiles=True)
-        return res if res else fallback
+        result = Chem.MolToSmiles(mol, canonical=False, kekuleSmiles=True)
+        return result if result else fallback
     except Exception:
         return fallback
 
-# ============ 3. 低级扰动函数 ============
 
-# --- ① Atom Miscount ---
-# ========= 2. atom_miscount：删除原子不再产生 [*] =========
+# ============================
+# Low-level Perturbation Functions
+# ============================
+
 def atom_miscount(smiles: str) -> str:
     """
-    - choice=='del' => **直接删除** 一个非碳原子
-    - choice=='add' => 原子互换（与原实现一致）
+    Atom miscount perturbation with two strategies:
+    - 'del': Directly remove a non-carbon atom
+    - 'add': Atom swapping (consistent with original implementation)
+    
+    Args:
+        smiles (str): Input SMILES string
+        
+    Returns:
+        str: Perturbed SMILES string
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -423,154 +501,147 @@ FG_REPLACE_SMILES = {
     "nitro": "CN",
 }
 
-def fg_mutate(sm: str) -> str:
-    mol = Chem.MolFromSmiles(sm)
-    if mol is None: return sm
-    matches = [(n, Chem.MolFromSmarts(s)) for n, s in FG_SMARTS.items()
-               if mol.HasSubstructMatch(Chem.MolFromSmarts(s))]
-    if not matches: return sm
+def fg_mutate(smiles: str) -> str:
+    """
+    Functional group mutation with deletion or replacement strategies.
+    
+    Args:
+        smiles (str): Input SMILES string
+        
+    Returns:
+        str: SMILES with mutated functional groups
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None: 
+        return smiles
+        
+    matches = [(name, Chem.MolFromSmarts(pattern)) 
+               for name, pattern in FG_SMARTS.items()
+               if mol.HasSubstructMatch(Chem.MolFromSmarts(pattern))]
+    if not matches: 
+        return smiles
+        
     try:
-        name, patt = random.choice(matches)
-        if random.random() < 0.75:      # delete
-            mol2 = Chem.DeleteSubstructs(mol, patt)
-        else:                           # replace
-            repl = Chem.MolFromSmiles(FG_REPLACE_SMILES[name])
-            mol2 = AllChem.ReplaceSubstructs(mol, patt, repl, replaceAll=False)[0]
-        return sanitize_or_fallback(mol2, sm)
+        name, pattern = random.choice(matches)
+        if random.random() < 0.75:  # Delete functional group
+            mol2 = Chem.DeleteSubstructs(mol, pattern)
+        else:  # Replace functional group
+            replacement = Chem.MolFromSmiles(FG_REPLACE_SMILES[name])
+            mol2 = AllChem.ReplaceSubstructs(mol, pattern, replacement, replaceAll=False)[0]
+        return sanitize_or_fallback(mol2, smiles)
     except Exception:
-        return sm
+        return smiles
 
-# --- ⑦ Substructure shuffle ---
-def substruct_shuffle(sm: str) -> str:
-    mol = Chem.MolFromSmiles(sm)
-    if mol is None: return sm
-    frags = list(BRICS.BRICSDecompose(mol, returnMols=False))
-    if len(frags) < 2: return sm
-    sel = random.sample(frags, k=min(3, len(frags)))
-    random.shuffle(sel)
-    return ".".join(sel)
 
-# ============ 4. 综合扰动器 ============
-
-# class RobustSmilesCorruptor:
-#     """统一入口，可串行 1–3 个扰动；BRICS 类操作自动最后执行"""
-#     def __init__(self):
-#         self.token_cfg = dict(mask_p=0.15, delete_p=0.15, replace_p=0.10)
-#         self.op_counter = {}
-
-#         self._ops = [
-#             ("token",          self._token_level),
-#             ("fg_drift",       fg_drift),
-#             ("atom_miscount",  atom_miscount),
-#             ("ring_shift",     ring_shift),
-#             ("ring_break",     ring_break),
-#             ("bond_swap",      bond_swap),
-#             ("fg_mutate",      fg_mutate),
-#             ("frag_permute",   frag_permute),      # BRICS
-#             ("substruct_shuffle", substruct_shuffle),  # BRICS
-#         ]
-#         self._brics_ops = {"frag_permute", "substruct_shuffle"}
-
-#     # ---- token‑level mask/del/replace ----
-#     def _token_level(self, sm: str) -> str:
-#         out = []
-#         for t in tokenize_smiles(sm):
-#             r = random.random()
-#             if r < self.token_cfg["mask_p"]:
-#                 out.append(MASK_TOKEN)
-#             elif r < self.token_cfg["mask_p"] + self.token_cfg["delete_p"]:
-#                 continue
-#             elif r < sum(self.token_cfg.values()):
-#                 # ★ updated: 随机替换为任意受支持原子
-#                 out.append(random.choice(
-#                     ['B','C','N','O','F','H','P','S','I','Br','Cl']
-#                 ))
-#             else:
-#                 out.append(t)
-#         return "".join(out)
-
-#     # ---- 调度 ----
-#     def __call__(self, sm: str) -> str:
-#         num_ops = random.choices([1, 2, 3], weights=[0.6, 0.3, 0.1])[0]
-#         chosen = random.sample(self._ops, k=num_ops)
-
-#         # 如果早期随机到 BRICS 操作，把它们推到末尾
-#         non_brics = [op for op in chosen if op[0] not in self._brics_ops]
-#         brics_ops = [op for op in chosen if op[0] in self._brics_ops]
-#         ordered   = non_brics + brics_ops
-
-#         res = sm
-#         for name, func in ordered:
-#             try:
-#                 res = func(res)
-#                 self.op_counter[name] = self.op_counter.get(name, 0) + 1
-#             except Exception:
-#                 self.op_counter["fallback"] = self.op_counter.get("fallback", 0) + 1
-#                 return sm
-#         return res
-
-class RobustSmilesCorruptor:
+def substruct_shuffle(smiles: str) -> str:
     """
-    统一入口；删去 BRICS 相关操作，避免产生 [*] 占位符。
-    可串行 1~2 个扰动（更稳妥）。
+    Shuffle molecular substructures using BRICS decomposition.
+    
+    Args:
+        smiles (str): Input SMILES string
+        
+    Returns:
+        str: SMILES with shuffled substructures
     """
-    def __init__(self):
-        self.token_cfg = dict(mask_p=0.15, delete_p=0.15, replace_p=0.10)
-        self.op_counter = {}
-
-        # —— 精简后的安全操作列表 ——
-        self._ops = [
-            ("token",          self._token_level),
-            ("fg_drift",       fg_drift),
-            ("atom_miscount",  atom_miscount),
-            ("ring_shift",     ring_shift),
-            ("bond_swap",      bond_swap),
-        ]
-
-    # ---- token-level mask/del/replace（保持原实现） ----
-    def _token_level(self, sm: str) -> str:
-        out = []
-        for t in tokenize_smiles(sm):
-            r = random.random()
-            if r < self.token_cfg["mask_p"]:
-                out.append(MASK_TOKEN)
-            elif r < self.token_cfg["mask_p"] + self.token_cfg["delete_p"]:
-                continue
-            elif r < sum(self.token_cfg.values()):
-                out.append(random.choice(
-                    ['B','C','N','O','F','H','P','S','I','Br','Cl']
-                ))
-            else:
-                out.append(t)
-        return "".join(out)
-
-    # ---- 调度 ----
-    def __call__(self, sm: str) -> str:
-        num_ops = random.choices([1, 2], weights=[0.7, 0.3])[0]  # ≤2 个扰动
-        chosen = random.sample(self._ops, k=num_ops)
-
-        res = sm
-        for name, func in chosen:
-            try:
-                res = func(res)
-                self.op_counter[name] = self.op_counter.get(name, 0) + 1
-            except Exception:
-                self.op_counter["fallback"] = self.op_counter.get("fallback", 0) + 1
-                return sm
-        return res
-
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None: 
+        return smiles
+        
+    fragments = list(BRICS.BRICSDecompose(mol, returnMols=False))
+    if len(fragments) < 2: 
+        return smiles
+        
+    selected = random.sample(fragments, k=min(3, len(fragments)))
+    random.shuffle(selected)
+    return ".".join(selected)
 
 
 # ============================
-# 3. In-memory 数据集（Dataset）
+# Comprehensive SMILES Corruptor
+# ============================
+
+class RobustSmilesCorruptor:
+    """
+    Unified SMILES corruption interface with safe operations.
+    Removes BRICS-related operations to avoid [*] placeholders.
+    Applies 1-2 perturbations sequentially for stability.
+    """
+    def __init__(self):
+        self.token_config = dict(mask_p=0.15, delete_p=0.15, replace_p=0.10)
+        self.operation_counter = {}
+
+        # Safe operation list (excluding BRICS operations)
+        self._operations = [
+            ("token_level", self._token_level_corruption),
+            ("fg_drift", fg_drift),
+            ("atom_miscount", atom_miscount),
+            ("ring_shift", ring_shift),
+            ("bond_swap", bond_swap),
+        ]
+
+    def _token_level_corruption(self, smiles: str) -> str:
+        """
+        Apply token-level corruptions: masking, deletion, and replacement.
+        
+        Args:
+            smiles (str): Input SMILES string
+            
+        Returns:
+            str: Corrupted SMILES string
+        """
+        output_tokens = []
+        for token in tokenize_smiles(smiles):
+            rand_value = random.random()
+            if rand_value < self.token_config["mask_p"]:
+                output_tokens.append(MASK_TOKEN)
+            elif rand_value < self.token_config["mask_p"] + self.token_config["delete_p"]:
+                continue  # Skip token (deletion)
+            elif rand_value < sum(self.token_config.values()):
+                # Random replacement with supported atoms
+                output_tokens.append(random.choice(
+                    ['B', 'C', 'N', 'O', 'F', 'H', 'P', 'S', 'I', 'Br', 'Cl']
+                ))
+            else:
+                output_tokens.append(token)
+        return "".join(output_tokens)
+
+    def __call__(self, smiles: str) -> str:
+        """
+        Apply corruption operations to SMILES string.
+        
+        Args:
+            smiles (str): Input SMILES string
+            
+        Returns:
+            str: Corrupted SMILES string
+        """
+        num_operations = random.choices([1, 2], weights=[0.7, 0.3])[0]  # Max 2 operations
+        chosen_operations = random.sample(self._operations, k=num_operations)
+
+        result = smiles
+        for operation_name, operation_func in chosen_operations:
+            try:
+                result = operation_func(result)
+                self.operation_counter[operation_name] = self.operation_counter.get(operation_name, 0) + 1
+            except Exception:
+                self.operation_counter["fallback"] = self.operation_counter.get("fallback", 0) + 1
+                return smiles
+        return result
+
+
+# ============================
+# In-memory Dataset Implementation
 # ============================
 import glob
 import random
 
 class SMILESPretokenDataset(Dataset):
-    def __init__(self, csv_path, char2idx, max_seq_length, compute_atom_types_fn, corruption_level=0.2):
-        """
-        csv_path: CSV 文件路径或文件夹。
+    """
+    High-performance in-memory SMILES dataset with corruption and atomic features.
+    Supports both single files and directory patterns for flexible data loading.
+    """
+    def __init__(self, csv_path: str, char2idx: Dict[str, int], max_seq_length: int, 
+                 compute_atom_types_fn, corruption_level: float = 0.2):
                   如果是文件夹，则加载该文件夹下所有 CSV 文件（每个 CSV 文件第一行为标题，列名为 "SMILES"）；
                   如果是 CSV 文件，则只加载该文件的数据。
         char2idx: SMILES 到索引的映射字典
