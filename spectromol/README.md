@@ -88,8 +88,7 @@ pandas
 scikit-learn
 
 # Chemistry libraries
-rdkit-pypi
-nltk
+rdkit
 
 # Visualization and analysis
 matplotlib
@@ -98,6 +97,7 @@ tqdm
 
 # Text processing
 Levenshtein
+nltk
 ```
 
 ### Data Preparation
@@ -216,22 +216,6 @@ robustness_metrics = analyze_robustness(
 # t-SNE visualization of learned representations
 plot_tsne_analysis(model, spectral_data, molecular_labels)
 ```
-
-## Contributing
-
-When contributing to SpectroMol:
-1. Follow the existing code structure and documentation style
-2. Add comprehensive tests for new features
-3. Update this README for significant changes
-4. Ensure chemical validity of any new evaluation metrics
-
-## License
-
-[License information to be added]
-
-## Support
-
-For questions, issues, or contributions, please contact [contact information] or open an issue in the repository.
 
 ---
 

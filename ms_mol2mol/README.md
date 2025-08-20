@@ -167,25 +167,6 @@ python infer.py --model_path /path/to/trained/model \
 - tqdm ≥ 4.60.0
 - tensorboard (optional, for training monitoring)
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Contributing
-
-We welcome contributions! Please see CONTRIBUTING.md for guidelines on:
-- Code style and formatting
-- Testing requirements
-- Documentation standards
-- Pull request procedures
-
-## Support
-
-For questions and support:
-- GitHub Issues: Report bugs and feature requests
-- Documentation: Comprehensive API reference available
-- Examples: Sample notebooks and scripts provided
-
 ---
 
 **Note**: This module is part of the multi-spec-elucidation project, focusing on integrating multiple spectroscopic techniques for enhanced molecular structure determination.
