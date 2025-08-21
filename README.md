@@ -120,7 +120,7 @@ pip install -r requirements.txt
 
 ### Training and Inference
 1. SpectroMol: go to the dir of [spectromol](./spectromol) for details.
-2. MS-Mol2Mol: go to the dir of [ms-mol2mol](./ms-mol2mol) for details.
+2. MS-Mol2Mol: go to the dir of [ms-mol2mol](./ms_mol2mol) for details.
 
 ### High-level Usage of SpectroMol: Multi-Modal Structure Prediction
 
