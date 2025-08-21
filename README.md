@@ -152,17 +152,6 @@ pip install -r requirements.txt
 
 ## 🚀 Quick Start
 
-<<<<<<< HEAD
-=======
-### Download the Dataset
-1. QM9-based multimodal spectra data: `https://huggingface.co/datasets/zhiyuanyan1/multi-spec-elucidation/tree/main/qm9_all_raw_spe`
-2. 400M molecules for pretraining: `https://huggingface.co/datasets/zhiyuanyan1/multi-spec-elucidation/tree/main/ms-mol2mol`
-
-### Training and Inference
-1. SpectroMol: go to the dir of [spectromol](./spectromol) for details.
-2. MS-Mol2Mol: go to the dir of [ms-mol2mol](./ms_mol2mol) for details.
-
->>>>>>> 9da491193b3c06e7da9157c0dc16faac24d8c8ee
 ### High-level Usage of SpectroMol: Multi-Modal Structure Prediction
 
 ```python
