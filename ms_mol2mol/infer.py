@@ -161,13 +161,14 @@ def generate_smiles(model: nn.Module, src_seq: torch.Tensor, atom_types: torch.T
 
 def obtain_HRMS_feature(smiles):
     """
-    检索对应当前pred分子对应gt分子的 DBE、精确分子量（对数归一化）以及前五周期各元素的计数，
-    返回向量维度为：2 + len(atomic_weights)。
+    Retrieve DBE, exact molecular weight (log-normalized) and element counts for the first five periods
+    corresponding to the current predicted molecule's ground truth molecule,
+    return vector dimension: 2 + len(atomic_weights).
     """
     gt_smiles = smiles
     mol = Chem.MolFromSmiles(gt_smiles)
     if mol is None:
-        # 理论上此情况在数据预处理阶段已被过滤
+        # Theoretically this case has been filtered out during data preprocessing
         return [0.0] * (2 + len(atomic_weights))
     dbe = calculate_dbe(mol)
     mol = Chem.AddHs(mol)
@@ -183,8 +184,8 @@ def obtain_HRMS_feature(smiles):
 import random
 def padding_or_deleting_atoms(input_smiles, input_atom_count, gt_atom_count):
     """
-    根据 gt_atom_count 调整 input_smiles 的原子数量（C, N, O, F），
-    直接字符级插入或删除，不保证生成的 SMILES 合法性。
+    Adjust the atom count (C, N, O, F) of input_smiles according to gt_atom_count,
+    direct character-level insertion or deletion, does not guarantee validity of generated SMILES.
     """
     smiles_chars = list(input_smiles)
     atom_symbols = ['C', 'N', 'O', 'F']
@@ -192,12 +193,12 @@ def padding_or_deleting_atoms(input_smiles, input_atom_count, gt_atom_count):
     for i, atom_symbol in enumerate(atom_symbols):
         diff = gt_atom_count[i] - input_atom_count[i]
 
-        if diff > 0:  # 缺原子 -> 插入
+        if diff > 0:  # Missing atoms -> insert
             for _ in range(diff):
                 pos = random.randint(0, len(smiles_chars))
                 smiles_chars.insert(pos, atom_symbol)
 
-        elif diff < 0:  # 多原子 -> 删除
+        elif diff < 0:  # Extra atoms -> delete
                         for _ in range(-diff):
                 positions = [idx for idx, ch in enumerate(smiles_chars) if ch == atom_symbol]
                 if positions:
@@ -325,13 +326,13 @@ if __name__ == '__main__':
     )
     model = model.to(device)
 
-    # 加载预训练模型权重
+    # Load pre-trained model weights
     #checkpoint_path = "pre_large_weights/molecule_pretraining_model_epoch7.pth"
     # checkpoint_path = "finetuned_molecule_pretraining_model_epoch10.pth"
     checkpoint_path = "./repair_old_finetuned_molecule_pretraining_model_epoch10.pth"
     if os.path.exists(checkpoint_path):
         state_dict = torch.load(checkpoint_path, map_location=device)
-        # 如果权重文件是在 DDP 下保存的，可能带有 "module." 前缀，此处需要去除
+        # If the weight file is saved under DDP, it may have "module." prefix, which needs to be removed here
         new_state_dict = {}
         for k, v in state_dict.items():
             new_key = k.replace("module.", "")
@@ -345,19 +346,19 @@ if __name__ == '__main__':
     
 
     if infer_one_sample:
-        # 输入一个 SMILES 字符串
+        # Input a SMILES string
         # input_smiles = "CCOC(=O)C1=CC=C1"
         input_smiles = "COC(=O)CCC(C)=N"
         true_atom_counts = {"C": 9, "N": 2, "O": 2, "F": 0}
         print("Input SMILES:", input_smiles)
 
         
-        # 进行推理
+        # Perform inference
         generated_smiles, src_indices, true_indices = inference(
             input_smiles, model, device, max_seq_length, char2idx, idx2char, mask_prob=0.5,
         )
 
-        # 解码 mask 后的 SMILES 以便查看（注意：mask 位置会显示为 <MASK>）
+        # Decode masked SMILES for viewing (note: mask positions will show as <MASK>)
         masked_smiles = decode_indices(src_indices, idx2char)
         true_smiles = decode_indices(true_indices, idx2char)
 
@@ -366,7 +367,7 @@ if __name__ == '__main__':
         print("Generated SMILES   :", generated_smiles)
 
         # ---------------------------
-        # 1. 计算原子数量 (C, N, O, F)
+        # 1. Calculate atom count (C, N, O, F)
         pred_atom_counts = compute_atom_count(generated_smiles)
 
         print("\n=== Atom Counts ===")
@@ -378,38 +379,38 @@ if __name__ == '__main__':
         for atom in ['C', 'N', 'O', 'F']:
             print(f"  {atom}: {pred_atom_counts.get(atom, 0)}")
 
-        # 检查真实与预测的原子数量是否匹配
+        # Check if true and predicted atom counts match
         atom_match = all(true_atom_counts.get(atom, 0) == pred_atom_counts.get(atom, 0) for atom in ['C', 'N', 'O', 'F'])
 
         # ---------------------------
-        # 2. 计算合法性评估
-        # 利用 RDKit 判断生成的 SMILES 是否为有效分子
+        # 2. Calculate validity assessment
+        # Use RDKit to determine if the generated SMILES is a valid molecule
         from rdkit import Chem
 
         def is_valid_smiles(smiles):
-            """判断 SMILES 是否有效，返回 True 或 False"""
+            """Check if SMILES is valid, return True or False"""
             mol = Chem.MolFromSmiles(smiles)
             return mol is not None
 
         validity = is_valid_smiles(generated_smiles)
-        print("\nGenerated SMILES 合法性评估:", "有效" if validity else "无效")
+        print("\nGenerated SMILES validity assessment:", "Valid" if validity else "Invalid")
 
         # ---------------------------
-        # 3. 计算 BLEU 得分
+        # 3. Calculate BLEU score
         from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
         smoothie = SmoothingFunction().method4
 
-        # 这里将 SMILES 字符串视为字符序列，当然你也可以采用自定义的 tokenization 策略
+        # Here we treat SMILES strings as character sequences, you can also use custom tokenization strategies
         reference = [list(true_smiles)]
         candidate = list(generated_smiles)
         bleu_score = sentence_bleu(reference, candidate, smoothing_function=smoothie)
         print("\nBLEU score:", bleu_score)
 
     else:
-        # 批量推理，采样N个不同结果，去重、筛选、排序并输出csv
+        # Batch inference, sample N different results, deduplicate, filter, sort and output csv
         input_file = "./fangyang/gp/csv/corr_draw/temperature_sampling_results.csv"
         output_file = "./fangyang/gp/csv/corr_draw/inference_topN_candidates.csv"
-        N = 100  # 每个smiles采样N个不同结果
+        N = 100  # Sample N different results for each smiles
 
         from rdkit.Chem import AllChem
         from rdkit import DataStructs
@@ -436,17 +437,17 @@ if __name__ == '__main__':
                 candidate_info = []
                 pred_fp = get_fingerprint(smiles)
                 true_atom_counts = compute_atom_count(true_smiles)
-                # 多次采样，使用不同的mask_prob增加多样性
-                for i in range(N*2):  # 采样多一些，后续去重
-                    # mask_prob从0到0.5变化，增加多样性
-                    mask_prob = i / (N*2) * 0.5  # 从0.0到0.5线性变化
+                # Multiple sampling with different mask_prob to increase diversity
+                for i in range(N*2):  # Sample more, deduplicate later
+                    # mask_prob varies from 0 to 0.5 to increase diversity
+                    mask_prob = i / (N*2) * 0.5  # Linear change from 0.0 to 0.5
                     generated_smiles, src_indices, true_indices = inference(
                         smiles, atom_types, additional_info, model, device, max_seq_length, char2idx, idx2char, mask_prob=mask_prob,
                     )
-                    # 跳过包含<UNK>的候选
+                    # Skip candidates containing <UNK>
                     if '<UNK>' in generated_smiles:
                         continue
-                    # 跳过不合法的候选
+                    # Skip invalid candidates
                     valid = is_valid_smiles(generated_smiles)
                     if not valid:
                         continue
@@ -454,7 +455,7 @@ if __name__ == '__main__':
                         continue
                     candidates.add(generated_smiles)
                     candidates.add(generated_smiles)
-                    # 原子数
+                    # Atom count
                     pred_atom_counts = compute_atom_count(generated_smiles)
                     atom_match = all(true_atom_counts.get(atom, 0) == pred_atom_counts.get(atom, 0) for atom in ['C', 'N', 'O', 'F'])
                     # tanimoto
@@ -467,16 +468,16 @@ if __name__ == '__main__':
                         'input_smiles': smiles,
                         'true_smiles': true_smiles,
                         'candidate': generated_smiles,
-                        'valid': True,  # 所有候选都是合法的
+                        'valid': True,  # All candidates are valid
                         'atom_match': atom_match,
                         'tanimoto': tanimoto
                     })
                     if len(candidates) >= N:
                         break
-                # 排序：valid>atom_match>tanimoto（不做筛选，只做排序）
+                # Sort: valid>atom_match>tanimoto (no filtering, only sorting)
                 candidate_info = sorted(candidate_info, key=lambda x: (-x['valid'], -x['atom_match'], -x['tanimoto']))
                 
-                # 打印当前predicted_smiles的所有候选结果
+                # Print all candidate results for current predicted_smiles
                 print(f"\n=== Predicted SMILES: {smiles} ===")
                 print(f"Ground Truth SMILES: {true_smiles}")
                 print(f"Total candidates generated: {len(candidate_info)}")
@@ -485,7 +486,7 @@ if __name__ == '__main__':
                     print(f"  Rank {i}: {c['candidate']}")
                     print(f"    Valid: {c['valid']}, Atom Match: {c['atom_match']}, Tanimoto: {c['tanimoto']:.4f}")
                 
-                # 计算BLEU分数：检查是否有与ground-truth完全一致的候选
+                # Calculate BLEU score: check if there are candidates that match exactly with ground-truth
                 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
                 smoothie = SmoothingFunction().method4
                 
@@ -494,7 +495,7 @@ if __name__ == '__main__':
                     bleu_score = 1.0
                     print(f"Found exact match with ground truth! BLEU = 1.0")
                 else:
-                    # 用top-1候选计算BLEU
+                    # Use top-1 candidate to calculate BLEU
                     if candidate_info:
                         best_candidate = candidate_info[0]['candidate']
                         reference = [list(true_smiles)]
@@ -505,22 +506,22 @@ if __name__ == '__main__':
                         bleu_score = 0.0
                         print(f"No candidates generated. BLEU = 0.0")
                 
-                # 只保留top-N
+                # Keep only top-N
                 for c in candidate_info[:N]:
-                    c['bleu_score'] = bleu_score  # 添加BLEU分数到结果中
+                    c['bleu_score'] = bleu_score  # Add BLEU score to results
                     all_results.append(c)
             except Exception as e:
                 print(f"Error processing SMILES '{smiles}': {e}")
-        # 输出到csv
+        # Output to csv
         out_df = pd.DataFrame(all_results)
         out_df.to_csv(output_file, index=False)
-        print(f"已输出所有候选到 {output_file}")
+        print(f"All candidates output to {output_file}")
         
-        # 计算overall BLEU score
+        # Calculate overall BLEU score
         print("\n=== Overall BLEU Score Calculation ===")
         unique_smiles_results = {}
         
-        # 按input_smiles分组，每个predicted_smiles只保留一个结果
+        # Group by input_smiles, keep only one result for each predicted_smiles
         for result in all_results:
             input_smiles = result['input_smiles']
             if input_smiles not in unique_smiles_results:
@@ -530,12 +531,12 @@ if __name__ == '__main__':
         smoothie = SmoothingFunction().method4
         
         def are_same_molecule(smiles1, smiles2):
-            """判断两个SMILES是否代表同一个分子（使用canonical SMILES）"""
+            """Check if two SMILES represent the same molecule (using canonical SMILES)"""
             try:
                 mol1 = Chem.MolFromSmiles(smiles1)
                 mol2 = Chem.MolFromSmiles(smiles2)
                 if mol1 is None or mol2 is None:
-                    return smiles1 == smiles2  # 如果无法解析，直接字符串比较
+                    return smiles1 == smiles2  # If parsing fails, do direct string comparison
                 canonical1 = Chem.MolToSmiles(mol1, canonical=True)
                 canonical2 = Chem.MolToSmiles(mol2, canonical=True)
                 return canonical1 == canonical2
@@ -550,12 +551,12 @@ if __name__ == '__main__':
             true_smiles = result['true_smiles']
             best_candidate = result['candidate']
             
-            # 检查是否是同一个分子
+            # Check if it's the same molecule
             if are_same_molecule(best_candidate, true_smiles):
                 bleu_score = 1.0
                 exact_matches += 1
             else:
-                # 计算BLEU分数
+                # Calculate BLEU score
                 reference = [list(true_smiles)]
                 candidate = list(best_candidate)
                 bleu_score = sentence_bleu(reference, candidate, smoothing_function=smoothie)

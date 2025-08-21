@@ -48,14 +48,14 @@ MASK_TOKEN = "<MASK>"  # Ensure this token is added to vocabulary
 # ============================
 # def tokenize_smiles(smiles):
 #     pattern = r'''
-#         (\[[CNOF][^\]]*\]) |    # 匹配方括号内的原子，如 [C+], [N-] 等（要求第一个字母为 C、N、O、F）
-#         (%\d{2})         |      # 匹配两位数的环闭标记，如 %12
-#         ([CNOF])        |       # 匹配单个原子符号 C, N, O, F
-#         (\d+)           |       # 匹配环闭数字（一个或多个数字）
-#         ([=#\-\+\(\)/\\])       # 匹配化学键、括号和斜杠等符号
+#         (\[[CNOF][^\]]*\]) |    # Match atoms within brackets, such as [C+], [N-] (requiring first letter to be C, N, O, F)
+#         (%\d{2})         |      # Match two-digit ring closure markers, such as %12
+#         ([CNOF])        |       # Match single atom symbols C, N, O, F
+#         (\d+)           |       # Match ring closure numbers (one or more digits)
+#         ([=#\-\+\(\)/\\])       # Match chemical bonds, parentheses and slashes
 #     '''
 #     tokens = re.findall(pattern, smiles, re.VERBOSE)
-#     # 每个匹配返回的是一个元组，取其中非空的部分
+#     # Each match returns a tuple, take the non-empty part
 #     token_list = [next(filter(None, t)).strip() for t in tokens if any(t)]
 #     return token_list
 

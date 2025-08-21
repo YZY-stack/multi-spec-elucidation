@@ -87,18 +87,18 @@ def inference_temperature_sampling(
         list: List of generated SMILES candidates with scores
     """
     """
-    基于温度采样的推理函数，生成多个候选SMILES
+    Temperature sampling based inference function to generate multiple SMILES candidates
     
     Args:
-        model: 训练好的模型
-        ir_spectrum, uv_spectrum, c_spectrum, h_spectrum, high_res_mass: 输入光谱数据
-        char2idx, idx2char: 字符映射
-        max_seq_length: 最大序列长度
-        atom_types: 原子类型信息
-        required_atom_counts: 原子数量约束
-        temperatures: 温度列表，如果为None，则使用默认温度范围
-        num_candidates: 需要生成的候选数量
-        device: 设备
+        model: Trained model
+        ir_spectrum, uv_spectrum, c_spectrum, h_spectrum, high_res_mass: Input spectral data
+        char2idx, idx2char: Character mappings
+        max_seq_length: Maximum sequence length
+        atom_types: Atom type information
+        required_atom_counts: Atom count constraints
+        temperatures: Temperature list, if None, uses default temperature range
+        num_candidates: Number of candidates to generate
+        device: Device
     
     Returns:
         List of generated SMILES strings

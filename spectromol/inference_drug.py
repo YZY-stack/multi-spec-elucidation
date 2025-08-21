@@ -52,7 +52,7 @@ SMILES_VOCAB = [
 
 vocab_size = len(SMILES_VOCAB)
 
-# 创建字符到索引的映射和索引到字符的映射
+# Create character to index mapping and index to character mapping
 char2idx = {token: idx for idx, token in enumerate(SMILES_VOCAB)}
 idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
@@ -122,7 +122,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
 
 
-            # atom_types顺序为[C, N, O, F]
+            # atom_types order is [C, N, O, F]
             atom_counts_array = atom_types[:, 1:].cpu().numpy()  # [batch_size, 4]
             required_atom_counts = []
             for counts in atom_counts_array:

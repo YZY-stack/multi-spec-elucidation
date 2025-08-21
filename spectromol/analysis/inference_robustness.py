@@ -52,7 +52,7 @@ SMILES_VOCAB = [
 
 vocab_size = len(SMILES_VOCAB)
 
-# 创建字符到索引的映射和索引到字符的映射
+# Create character to index mapping and index to character mapping
 char2idx = {token: idx for idx, token in enumerate(SMILES_VOCAB)}
 idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
@@ -61,8 +61,8 @@ idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
 
 
-# 定义推理函数，包括BLEU得分计算和注意力分析
-# 定义推理函数，包括每个分子的BLEU得分计算和注意力分析
+# Define inference function including BLEU score calculation and attention analysis
+# Define inference function including BLEU score calculation and attention analysis for each molecule
 def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_length=100, save_dir='corr_draw'):
     model.eval()
     smoothie = SmoothingFunction().method4
@@ -76,18 +76,18 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
     n_exact = 0
     maccs_sim, rdk_sim, morgan_sim, levs = [], [], [], []
 
-    bleu_scores = []  # 存储每个分子的BLEU得分
+    bleu_scores = []  # Store BLEU scores for each molecule
 
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
     with torch.no_grad():
         for batch in tqdm(dataloader):
-            # 解包批次数据
+            # Unpack batch data
             ir_spectrum, raman_spectrum, c_spectrum, h_spectrum, low_res_mass, high_res_mass, \
             smiles_indices, auxiliary_targets, atom_types, coordinates = batch
 
-            # 将数据移动到设备上
+            # Move data to device
             ir_spectrum = ir_spectrum.to(device)
             raman_spectrum = raman_spectrum.to(device)
             c_spectrum = c_spectrum.to(device)
@@ -99,7 +99,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
             batch_size = ir_spectrum.size(0)
 
-            # 获取真实的SMILES字符串
+            # Get true SMILES strings
             true_smiles_list = []
             for i in range(batch_size):
                 true_indices = smiles_indices[i]
@@ -113,7 +113,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
                 true_smiles_str = ''.join(true_smiles_tokens)
                 true_smiles_list.append(true_smiles_str)
 
-            # 使用模型进行预测，获取预测的SMILES字符串
+            # Use model for prediction, get predicted SMILES strings
             predicted_smiles_list = inference(
                 model,
                 ir_spectrum,
@@ -128,7 +128,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
                 atom_types=atom_types
             )
 
-            # 对于批次中的每个样本
+            # For each sample in the batch
             for i in range(batch_size):
                 true_smiles_str = true_smiles_list[i]
                 predicted_smiles_str = predicted_smiles_list[i]
@@ -189,14 +189,14 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
 
 
-                # 保存每个分子的BLEU得分
+                # Save BLEU score for each molecule
                 bleu_scores.append({
                     'true_smiles': true_smiles_str,
                     'predicted_smiles': predicted_smiles_str,
                     'bleu_score': bleu_score
                 })
 
-                # # 调用analyze_feature_correlations函数，保存分析结果
+                # # Call analyze_feature_correlations function, save analysis results
                 # if true_smiles_str == 'O=C1CCC2(NC12)C#N':
                 #     analyze_feature_correlations(
                 #         model,
@@ -211,7 +211,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
                 #         save_dir=save_dir
                 #     )
     
-    # 指标保存
+    # Save metrics
     avg_bleu_score = total_bleu_score / total_smiles
     accuracy = total_correct / total_smiles
     # Compute validity
@@ -221,7 +221,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
     print(f'BLEU: {avg_bleu_score}, Top-1 Acc: {accuracy}, Validity: {validity}, Cos-similarity: {cos_sim_all}, Exact: {exact}, Levenshtein: {np.mean(levs)}, MACCS FTS: {np.mean(maccs_sim)}, RDKit FTS: {np.mean(rdk_sim)}, Morgan FTS: {np.mean(morgan_sim)}.')
 
-    # # 将BLEU得分保存为CSV文件
+    # # Save BLEU scores as CSV file
     # import csv
     # with open(os.path.join(save_dir, 'bleu_scores_cano.csv'), 'w', newline='') as csvfile:
     #     fieldnames = ['true_smiles', 'predicted_smiles', 'bleu_score']
@@ -230,7 +230,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
     #     for row in bleu_scores:
     #         writer.writerow(row)
 
-    return bleu_scores  # 返回每个分子的BLEU得分列表
+    return bleu_scores  # Return list of BLEU scores for each molecule
 
 
 
@@ -298,16 +298,16 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
 
 
-            # 将atom_types[:, 2:]提取为每个样本的所需原子计数
-            # 假设atom_types[:, 2:]顺序为[C, N, O, F]
+            # Extract atom_types[:, 2:] as required atom counts for each sample
+            # Assume atom_types[:, 2:] order is [C, N, O, F]
             atom_counts_array = atom_types[:, 2:].cpu().numpy()  # [batch_size, 4]
             required_atom_counts = []
             for counts in atom_counts_array:
-                # 转为字典
+                # Convert to dictionary
                 req_dict = dict(zip(['C', 'N', 'O', 'F'], counts))
                 required_atom_counts.append(req_dict)
 
-            # 推断
+            # Inference
             predicted_smiles_list = inference(
                 model,
                 ir_spectrum,
@@ -321,7 +321,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
                 max_seq_length=100,
                 atom_types=atom_types,
                 required_atom_counts=required_atom_counts,
-                beam_size=5,  # 自定义beam_size
+                beam_size=5,  # Custom beam_size
             )
 
             for i in range(batch_size):
@@ -472,7 +472,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
 
 
-# 定义单个样本的推理函数
+# Define single sample inference function
 def inference_(model, ir_spectrum, raman_spectrum, c_spectrum, h_spectrum,
               low_res_mass, high_res_mass, char2idx, idx2char, max_seq_length=100, atom_types=None):
     model.eval()
@@ -508,7 +508,7 @@ def inference_(model, ir_spectrum, raman_spectrum, c_spectrum, h_spectrum,
         batch_size = ir_spectrum.size(0)
         device = ir_spectrum.device
 
-        # 用<SOS>标记初始化输入序列
+        # Initialize input sequence with <SOS> token
         tgt_indices = torch.full((1, batch_size), char2idx['<SOS>'], dtype=torch.long, device=device)
 
         generated_tokens = []
@@ -554,12 +554,12 @@ def inference_(model, ir_spectrum, raman_spectrum, c_spectrum, h_spectrum,
 
 def apply_constraints_for_beam(candidate_seq, char2idx, idx2char, required_atom_counts, open_rings):
     """
-    对单条候选序列进行约束检查，并返回一个valid_tokens布尔向量表示可用的token。
+    Perform constraint checking on a single candidate sequence, and return a valid_tokens boolean vector indicating available tokens.
     candidate_seq: list of int (token indices)
     required_atom_counts: dict {'C':int, 'N':int, 'O':int, 'F':int}
     open_rings: dict for ring status {'1':0,'2':0,'3':0,'4':0,'5':0}
     """
-    # 将candidate_seq中去掉<PAD>,<SOS>,<EOS>
+    # Remove <PAD>, <SOS>, <EOS> from candidate_seq
     seq_chars = []
     for t in candidate_seq:
         if t == char2idx['<EOS>']:
@@ -567,7 +567,7 @@ def apply_constraints_for_beam(candidate_seq, char2idx, idx2char, required_atom_
         if t not in [char2idx['<PAD>'], char2idx['<SOS>']]:
             seq_chars.append(idx2char[t])
     
-    # 初始化valid_tokens
+    # Initialize valid_tokens
     vocab_size = len(idx2char)
     valid_tokens = [True] * vocab_size
 
@@ -576,22 +576,22 @@ def apply_constraints_for_beam(candidate_seq, char2idx, idx2char, required_atom_
         if tok in current_atom_counts:
             current_atom_counts[tok] += 1
 
-    # 原子计数约束
+    # Atom count constraints
     for atom, req_count in required_atom_counts.items():
         if current_atom_counts[atom] >= req_count:
             a_idx = char2idx[atom]
             valid_tokens[a_idx] = False
 
-    # 括号匹配
+    # Parentheses matching
     open_p = seq_chars.count('(')
     close_p = seq_chars.count(')')
     if close_p >= open_p:
-        # 不能再生成')'
+        # Cannot generate ')' anymore
         rp_idx = char2idx.get(')', None)
         if rp_idx is not None:
             valid_tokens[rp_idx] = False
 
-    # 避免连续两个键('#','=')
+    # Avoid consecutive bonds ('#','=')
     if len(seq_chars) > 0 and seq_chars[-1] in ['#','=']:
         # 下个token不能是'#','='
         hash_idx = char2idx['#']

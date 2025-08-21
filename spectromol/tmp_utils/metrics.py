@@ -252,7 +252,7 @@ def morgan_similarity(s1, s2, radius=2, nBits=2048):
     fp2 = calculate_morgan_fingerprint(s2, radius, nBits)
     return calculate_tanimoto_similarity(fp1, fp2)
 
-# 微观指标函数
+# Microscopic metrics function
 def get_max_mcs(s1, s2):
     true_mol = Chem.MolFromSmiles(s1)
     true_atoms = true_mol.GetNumAtoms()
@@ -277,7 +277,7 @@ def get_max_mcs(s1, s2):
         mcs_coefficient = mcs_atoms / min(true_atoms, predicted_atoms)
     return mcs_ratio, mcs_tanimoto, mcs_coefficient
 
-# 灵敏性和特异性函数
+# Sensitivity and specificity function
 def calculate_sensitivity_specificity(s1, s2):
     count_s1 = Counter(s1)
     count_s2 = Counter(s2)

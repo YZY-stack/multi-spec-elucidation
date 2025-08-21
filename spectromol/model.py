@@ -148,7 +148,7 @@ class AtomPredictionModel(nn.Module):
 
 
 
-        # # 计数任务的输出头
+        # # Output head for counting tasks
         # self.count_task_heads = nn.ModuleDict()
         # for task, num_classes in count_tasks_classes.items():
         #     self.count_task_heads[task] = nn.Sequential(
@@ -156,10 +156,10 @@ class AtomPredictionModel(nn.Module):
         #         # nn.ReLU(),
         #         # nn.Linear(64, 128),
         #         # nn.ReLU(),
-        #         # nn.Linear(128, num_classes)  # 输出类别数的 logits
+        #         # nn.Linear(128, num_classes)  # Output logits for number of classes
         #     )
 
-        # # 二元分类任务的输出头
+        # # Output head for binary classification tasks
         # self.binary_task_heads = nn.ModuleDict()
         # for task in binary_tasks:
         #     self.binary_task_heads[task] = nn.Sequential(
@@ -167,7 +167,7 @@ class AtomPredictionModel(nn.Module):
         #         # nn.ReLU(),
         #         # nn.Linear(64, 128),
         #         # nn.ReLU(),
-        #         # nn.Linear(128, 1)  # 输出单个 logit
+        #         # nn.Linear(128, 1)  # Output single logit
         #     )
 
 
@@ -244,7 +244,7 @@ class AtomPredictionModel(nn.Module):
 
 
 
-        # # 辅助任务预测
+        # # Auxiliary task prediction
         # count_task_outputs = {}
         # for task, head in self.count_task_heads.items():
         #     logits = head(fusion_feat)  # [batch_size, num_classes]
@@ -337,21 +337,21 @@ class Tokenizer(nn.Module):
 
     # def forward(self, ir_spectrum, uv_spectrum, c_spectrum, h_spectrum,
     #             low_res_mass, high_res_mass, tgt_seq, tgt_mask=None):
-    #     # 编码器部分
+    #     # Encoder part
     #     spectra_feat = self.spectra_encoder(ir_spectrum, uv_spectrum)
     #     nmr_feat = self.nmr_encoder(c_spectrum, h_spectrum)
     #     # mass_feat = self.mass_spectrum_encoder(low_res_mass, high_res_mass)
     #     # fusion_feat = self.fusion_encoder(spectra_feat, nmr_feat, mass_feat)  # [batch_size, d_model]
     #     fusion_feat = self.fusion_encoder(spectra_feat, nmr_feat)  # [batch_size, d_model]
 
-    #     # 将融合特征作为 memory，并添加序列维度
+    #     # Use fusion features as memory and add sequence dimension
     #     memory = fusion_feat.unsqueeze(0)  # [1, batch_size, d_model]
     #     # memory = spectra_feat.unsqueeze(0)  # [1, batch_size, d_model]
 
-    #     # 解码器部分
+    #     # Decoder part
     #     output = self.smiles_decoder(tgt_seq, memory, tgt_mask)
 
-    #     # 辅助任务预测
+    #     # Auxiliary task prediction
     #     count_task_outputs = {}
     #     for task, head in self.count_task_heads.items():
     #         logits = head(spectra_feat)  # [batch_size, num_classes]
@@ -377,8 +377,8 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, d_model)  # [max_len, d_model]
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)  # [max_len, 1]
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))  # [d_model//2]
-        pe[:, 0::2] = torch.sin(position * div_term)  # 偶数位置
-        pe[:, 1::2] = torch.cos(position * div_term)  # 奇数位置
+        pe[:, 0::2] = torch.sin(position * div_term)  # Even positions
+        pe[:, 1::2] = torch.cos(position * div_term)  # Odd positions
         pe = pe.unsqueeze(1)  # [max_len, 1, d_model]
         self.register_buffer('pe', pe)
     
@@ -463,16 +463,16 @@ class SMILESEncoderDecoder(nn.Module):
         tgt_emb = self.embedding(tgt) * math.sqrt(self.d_model)
         tgt_emb = self.pos_encoder(tgt_emb)  # [seq_len, batch_size, d_model]
 
-        # 处理 atom_types
+        # Process atom_types
         if atom_types is not None:
             atom_types_feat = self.atom_types_linear(atom_types)  # [batch_size, d_model]
             atom_types_feat = torch.relu(atom_types_feat)
             atom_types_feat = atom_types_feat.unsqueeze(0)  # [1, batch_size, d_model]
 
-            # 将 atom_types_feat 扩展到与 tgt_emb 相同的时间维度
+            # Expand atom_types_feat to the same time dimension as tgt_emb
             atom_types_feat = atom_types_feat.expand(tgt_emb.size(0), -1, -1)  # [seq_len, batch_size, d_model]
 
-            # 将 atom_types_feat 与 tgt_emb 结合
+            # Combine atom_types_feat with tgt_emb
             tgt_emb = tgt_emb + atom_types_feat
 
         output = self.transformer_decoder(tgt_emb, memory, tgt_mask=tgt_mask)
@@ -480,7 +480,7 @@ class SMILESEncoderDecoder(nn.Module):
         return output
 
     def generate_square_subsequent_mask(self, sz):
-        """生成下三角掩码，用于屏蔽序列中未来的信息"""
+        """Generate lower triangular mask to mask future information in the sequence"""
         mask = torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
         return mask
 

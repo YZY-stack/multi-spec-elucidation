@@ -41,7 +41,7 @@ data_split_mode = 'scaffold'
 
 
 
-# 预先定义的 SMILES 字符集
+# Predefined SMILES character set
 SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
 #                 'C', '#', '1', '(', '=', 'O', 
 #                 ')', 'n', 'c', 'N', '2', '[nH]', 
@@ -59,7 +59,7 @@ SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
                 # '%', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 vocab_size = len(SMILES_VOCAB)
 
-# 创建字符到索引的映射和索引到字符的映射
+# Create character to index mapping and index to character mapping
 char2idx = {token: idx for idx, token in enumerate(SMILES_VOCAB)}
 idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
@@ -75,7 +75,7 @@ def extract_transformer_memory(model,
                                high_res_mass,
                                atom_types):
     """
-    给定单个 batch 的输入，返回该 batch 对应的 memory 表示。
+    Given a single batch input, return the corresponding memory representation for that batch.
     """
     model.eval()
     with torch.no_grad():
@@ -84,7 +84,7 @@ def extract_transformer_memory(model,
         n_spectrum = h_spectrum[:, 607:621]
         o_spectrum = h_spectrum[:, 621:]
 
-        # 和模型的 tokenizer 部分保持一致
+        # Keep consistent with the model's tokenizer part
         features = {
             # 如果你的模型用到 IR/Raman 就加入
             # "ir": ir_spectrum,
