@@ -5,7 +5,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.9+-red.svg)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![arXiv](https://img.shields.io/badge/arXiv-2024.00000-b31b1b.svg)](https://arxiv.org)
+[![Dataset](https://img.shields.io/badge/🤗-Dataset_Download-blue.svg)](https://huggingface.co/datasets/zhiyuanyan1/multi-spec-elucidation)
 
 *Deep Learning Framework for Molecular Structure Elucidation from Multi-Modal Spectroscopic Data*
 
@@ -80,6 +80,44 @@ Self-supervised molecular transformer for large-scale chemical understanding and
 - Distributed training with gradient accumulation
 - Beam search and temperature sampling strategies
 
+
+## 📃 Datasets
+
+This project utilizes comprehensive datasets hosted on Hugging Face, providing both molecular pre-training data and multi-modal spectroscopic datasets for structure elucidation tasks.
+
+### 🗃️ Dataset Collection
+**Main Dataset Hub**: [multi-spec-elucidation](https://huggingface.co/datasets/zhiyuanyan1/multi-spec-elucidation)
+
+Our dataset collection includes two primary components:
+
+#### 🧪 MS Mol2Mol Pre-training Dataset
+- **Repository**: [ms-mol2mol](https://huggingface.co/datasets/zhiyuanyan1/multi-spec-elucidation/tree/main/ms-mol2mol)
+- **Content**: Large-scale molecular dataset containing 400M molecules for self-supervised pre-training
+- **Purpose**: Molecular representation learning and transformer pre-training
+- **Format**: SMILES sequences with molecular properties and descriptors
+- **Applications**: Foundation model development, molecular understanding, and chemical space exploration
+
+#### 🔬 SpectroMol QM9 Spectral Dataset
+- **Repository**: [qm9_all_raw_spe](https://huggingface.co/datasets/zhiyuanyan1/multi-spec-elucidation/tree/main/qm9_all_raw_spe)
+- **Content**: Comprehensive multi-modal spectroscopic data derived from QM9 molecules
+- **Modalities**: IR, UV-Vis, NMR (¹H, ¹³C, ¹⁹F, ¹⁵N, ¹⁷O), and mass spectrometry data
+- **Purpose**: Training and evaluation of multi-modal structure elucidation models
+- **Format**: Processed spectral features paired with ground-truth SMILES structures
+- **Applications**: Multi-modal learning, spectral-structural relationship modeling, and analytical chemistry AI
+
+### 📥 Data Access
+```bash
+# Download datasets using Hugging Face datasets library
+from datasets import load_dataset
+
+# Load MS Mol2Mol pre-training data
+ms_mol2mol_dataset = load_dataset("zhiyuanyan1/multi-spec-elucidation", data_dir="ms-mol2mol")
+
+# Load SpectroMol QM9 spectral data
+spectromol_dataset = load_dataset("zhiyuanyan1/multi-spec-elucidation", data_dir="qm9_all_raw_spe")
+```
+
+
 ## 🛠️ Installation
 
 ### Prerequisites
@@ -114,7 +152,7 @@ pip install -r requirements.txt
 
 ## 🚀 Quick Start
 
-### SpectroMol: Multi-Modal Structure Prediction
+### High-level Usage of SpectroMol: Multi-Modal Structure Prediction
 
 ```python
 from spectromol import AtomPredictionModel, predict_greedy
@@ -136,7 +174,7 @@ predicted_smiles = predict_greedy(
 )
 ```
 
-### MS Mol2Mol: Pre-training and Fine-tuning
+### High-level Usage of MS-Mol2Mol: Pre-training and Fine-tuning
 
 ```python
 from ms_mol2mol import MoleculePretrainingModel, train_model
