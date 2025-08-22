@@ -734,5 +734,5 @@ train(
     train_dataloader,
     val_dataloader,
     epochs=1000,
-    save_dir=f'./fangyang/spectromol/csv/weights'
+    save_dir=f'./spectromol/csv/weights'
 )
