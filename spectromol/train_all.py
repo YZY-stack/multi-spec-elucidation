@@ -343,7 +343,8 @@ def train(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, ep
         if val_bleu_score > best_bleu_score:
             best_bleu_score = val_bleu_score
             print(f"Current best model with BLEU Score: {best_bleu_score:.4f}")
-            torch.save(model.state_dict(), os.path.join(save_dir, 'tmp.pth'))
+            os.makedirs(save_dir, exist_ok=True)
+            torch.save(model.state_dict(), os.path.join(save_dir, 'best.pth'))
 
 
 
