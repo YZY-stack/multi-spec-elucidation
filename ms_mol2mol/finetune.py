@@ -1252,7 +1252,7 @@ def train(rank, world_size, csv_folder, num_epochs=10, batch_size=128, max_seq_l
 # 9. DDP 多卡训练入口
 # ============================
 def main():
-    csv_folder = "./gp/csv/corr_draw/top10_preds_long_2.csv"  # CSV 文件所在目录（10个 CSV 文件）
+    csv_folder = "./spectromol/csv/corr_draw/top10_preds_long_2.csv"  # CSV 文件所在目录（10个 CSV 文件）
     world_size = 8  # 使用 4 张 GPU
     mp.spawn(train, args=(world_size, csv_folder, 10, 128, 400), nprocs=world_size, join=True)
 

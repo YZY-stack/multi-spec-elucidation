@@ -445,7 +445,7 @@ def load_model(model_path, vocab_size, char2idx):
 
 if __name__ == "__main__":
     # model path
-    model_path = './fangyang/gp/csv/weights_scaffold_semantic_simple/best_semantic_supervised.pth'
+    model_path = './fangyang/spectromol/csv/weights_scaffold_semantic_simple/best_semantic_supervised.pth'
     
     # load the model
     model = load_model(model_path, vocab_size, char2idx)
@@ -465,7 +465,7 @@ if __name__ == "__main__":
     # uv
     print('load uv file...')
     uv_max_value = 15.0
-    uv_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/uv.csv')
+    uv_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/uv.csv')
     peak_columns = [col for col in uv_spe_filtered.columns if 'peak' in col]
     uv_spe_filtered[peak_columns] = uv_spe_filtered[peak_columns] / uv_max_value
     uv_spe_filtered = uv_spe_filtered.to_numpy()
@@ -474,7 +474,7 @@ if __name__ == "__main__":
     # ir
     print('load ir file...')
     ir_max_value = 4000.0
-    ir_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/ir_82.csv')
+    ir_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/ir_82.csv')
     peak_columns = [col for col in ir_spe_filtered.columns if 'peak' in col]
     ir_spe_filtered[peak_columns] = ir_spe_filtered[peak_columns] / ir_max_value
     ir_spe_filtered = ir_spe_filtered.to_numpy()
@@ -484,7 +484,7 @@ if __name__ == "__main__":
     print('load 1dc-nmr with dept file...')
     cnmr_max_value = 220.0
     cnmr_min_value = -10.0
-    nmrc_spe_filtered = pd.read_csv('./gp/t50_drug_database/C0_to_C9_C_DEPT_NMR.csv')
+    nmrc_spe_filtered = pd.read_csv('./spectromol/t50_drug_database/C0_to_C9_C_DEPT_NMR.csv')
     peak_columns = [col for col in nmrc_spe_filtered.columns if 'peak' in col]
     nmrc_spe_filtered[peak_columns] = (nmrc_spe_filtered[peak_columns] - cnmr_min_value) / (cnmr_max_value - cnmr_min_value)
     nmrc_spe_filtered = nmrc_spe_filtered.to_numpy()
@@ -492,7 +492,7 @@ if __name__ == "__main__":
     print('load 2dc-nmr (c-c, c-x) file...')
     cnmr_2d_max_value = 450.0
     cnmr_2d_min_value = -400.0
-    twoD_nmr = pd.read_csv('./gp/t50_drug_database/2d_cnmr.csv')
+    twoD_nmr = pd.read_csv('./spectromol/t50_drug_database/2d_cnmr.csv')
     peak_columns = [col for col in twoD_nmr.columns if 'peak' in col]
     twoD_nmr[peak_columns] = (twoD_nmr[peak_columns] - cnmr_2d_min_value) / (cnmr_2d_max_value - cnmr_2d_min_value)
     twoD_nmr = twoD_nmr.to_numpy()
@@ -503,7 +503,7 @@ if __name__ == "__main__":
     print('load 1d h-nmr file...')
     nmrh_max_value = 12.0
     nmrh_min_value = -2.0
-    nmrh_spe_filtered = pd.read_csv('./gp/t50_drug_database/C0_to_C9_spin_H_NMR.csv')
+    nmrh_spe_filtered = pd.read_csv('./spectromol/t50_drug_database/C0_to_C9_spin_H_NMR.csv')
     peak_columns = [col for col in nmrh_spe_filtered.columns if 'peak' in col]
 
     print('Filtering H-NMR samples with abnormal values...')
@@ -518,7 +518,7 @@ if __name__ == "__main__":
     # HSQC
     hsqc_max_value = 400.0
     hsqc_min_value = -350.0
-    hsqc = pd.read_csv('./gp/t50_drug_database/2D_H-X_HSQC.csv')
+    hsqc = pd.read_csv('./spectromol/t50_drug_database/2D_H-X_HSQC.csv')
     peak_columns = [col for col in hsqc.columns if 'peak' in col]
     hsqc[peak_columns] = (hsqc[peak_columns] - hsqc_min_value) / (hsqc_max_value - hsqc_min_value)
     hsqc = hsqc.to_numpy()
@@ -526,7 +526,7 @@ if __name__ == "__main__":
     # COSY
     cosy_max_value = 14.0
     cosy_min_value = -2.0
-    nmr_cosy = pd.read_csv('./gp/t50_drug_database/C0_to_C9_2D_COSY.csv')
+    nmr_cosy = pd.read_csv('./spectromol/t50_drug_database/C0_to_C9_2D_COSY.csv')
     hxyh_columns = [col for col in nmr_cosy.columns if 'H_X_Y_H' in col]
     nmr_cosy = nmr_cosy[hxyh_columns]
     peak_columns = [col for col in nmr_cosy.columns if 'peak' in col]
@@ -538,7 +538,7 @@ if __name__ == "__main__":
     # F-NMR
     fnmr_max_value = 0.0001
     fnmr_min_value = -400.0
-    nmrf_spe_filtered = pd.read_csv('./gp/t50_drug_database/C0_to_C9_F_NMR.csv')
+    nmrf_spe_filtered = pd.read_csv('./spectromol/t50_drug_database/C0_to_C9_F_NMR.csv')
     peak_columns = [col for col in nmrf_spe_filtered.columns if 'peak' in col]
     nmrf_spe_filtered[peak_columns] = (nmrf_spe_filtered[peak_columns] - fnmr_min_value) / (fnmr_max_value - fnmr_min_value)
     nmrf_spe_filtered = nmrf_spe_filtered.to_numpy()
@@ -546,7 +546,7 @@ if __name__ == "__main__":
     # N-NMR  
     nnmr_max_value = 400.0
     nnmr_min_value = -260.0
-    nmrn_spe_filtered = pd.read_csv('./gp/t50_drug_database/C0_to_C9_N_NMR.csv')
+    nmrn_spe_filtered = pd.read_csv('./spectromol/t50_drug_database/C0_to_C9_N_NMR.csv')
     peak_columns = [col for col in nmrn_spe_filtered.columns if 'peak' in col]
     nmrn_spe_filtered[peak_columns] = (nmrn_spe_filtered[peak_columns] - nnmr_min_value) / (nnmr_max_value - nnmr_min_value)
     nmrn_spe_filtered = nmrn_spe_filtered.to_numpy()
@@ -554,7 +554,7 @@ if __name__ == "__main__":
     # O-NMR
     onmr_max_value = 460.0
     onmr_min_value = -385.0
-    nmro_spe_filtered = pd.read_csv('./gp/t50_drug_database/C0_to_C9_O_NMR.csv')
+    nmro_spe_filtered = pd.read_csv('./spectromol/t50_drug_database/C0_to_C9_O_NMR.csv')
     peak_columns = [col for col in nmro_spe_filtered.columns if 'peak' in col]
     nmro_spe_filtered[peak_columns] = (nmro_spe_filtered[peak_columns] - onmr_min_value) / (onmr_max_value - onmr_min_value)
     nmro_spe_filtered = nmro_spe_filtered.to_numpy()
@@ -565,7 +565,7 @@ if __name__ == "__main__":
 
     # ms
     print('load high-mass file...')
-    mass = pd.read_csv('./gp/t50_drug_database/MS.csv')
+    mass = pd.read_csv('./spectromol/t50_drug_database/MS.csv')
     high_mass_spe = mass.to_numpy()
     print('high-mass_spe:', high_mass_spe.shape)
 
@@ -574,7 +574,7 @@ if __name__ == "__main__":
     print(f"Atom type shape: {atom_type.shape}")
 
     # smiles
-    smiles_list = pd.read_csv('./gp/t50_drug_database/smiles.csv').values.tolist()
+    smiles_list = pd.read_csv('./spectromol/t50_drug_database/smiles.csv').values.tolist()
     smiles_lengths = [len(smiles[0]) for smiles in smiles_list]
     max_smiles_length = max(smiles_lengths)
     max_seq_length = max_smiles_length + 2
@@ -582,7 +582,7 @@ if __name__ == "__main__":
     print(f"模型中应使用的 max_seq_length 为：{max_seq_length}")
 
     # aux
-    auxiliary_data = pd.read_csv('./gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
+    auxiliary_data = pd.read_csv('./spectromol/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
     columns = auxiliary_data.columns.tolist()
     auxiliary_tasks = [col for col in columns]
     print(f"Auxiliary tasks: {auxiliary_tasks}")
@@ -636,7 +636,7 @@ if __name__ == "__main__":
         char2idx,
         idx2char,
         max_seq_length=100,
-        save_dir='./fangyang/gp/csv/corr_draw',
+        save_dir='./fangyang/spectromol/csv/corr_draw',
         temperatures=[0.6, 0.8, 1.0, 1.2, 1.5],
         num_candidates=50
     )

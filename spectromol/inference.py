@@ -647,8 +647,8 @@ def load_model(model_path, vocab_size, char2idx):
 
 if __name__ == "__main__":
     # Define model file path
-    # model_path = './fangyang/gp/csv/weights_scaffold_at/0806_ft.pth'
-    model_path = './fangyang/gp/csv/weights_scaffold_semantic_simple/best_semantic_supervised.pth'
+    # model_path = './fangyang/spectromol/csv/weights_scaffold_at/0806_ft.pth'
+    model_path = './fangyang/spectromol/csv/weights_scaffold_semantic_simple/best_semantic_supervised.pth'
 
     # Load model
     model = load_model(model_path, vocab_size, char2idx)
@@ -675,7 +675,7 @@ if __name__ == "__main__":
     # uv
     print('load uv file...')
     uv_max_value = 15.0
-    uv_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/uv.csv')
+    uv_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/uv.csv')
     peak_columns = [col for col in uv_spe_filtered.columns if 'peak' in col]
     uv_spe_filtered[peak_columns] = uv_spe_filtered[peak_columns] / uv_max_value
     uv_spe_filtered = uv_spe_filtered.to_numpy()
@@ -685,7 +685,7 @@ if __name__ == "__main__":
     # ir
     print('load ir file...')
     ir_max_value = 4000.0
-    ir_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/ir_82.csv')
+    ir_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/ir_82.csv')
     peak_columns = [col for col in ir_spe_filtered.columns if 'peak' in col]
     ir_spe_filtered[peak_columns] = ir_spe_filtered[peak_columns] / ir_max_value
     ir_spe_filtered = ir_spe_filtered.to_numpy()
@@ -696,7 +696,7 @@ if __name__ == "__main__":
     print('load 1dc-nmr with dept file...')
     cnmr_max_value = 220.0
     cnmr_min_value = -10.0
-    nmrc_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_cnmr_dept.csv')
+    nmrc_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_cnmr_dept.csv')
     peak_columns = [col for col in nmrc_spe_filtered.columns if 'peak' in col]
     nmrc_spe_filtered[peak_columns] = (nmrc_spe_filtered[peak_columns] - cnmr_min_value) / (cnmr_max_value - cnmr_min_value)
     nmrc_spe_filtered = nmrc_spe_filtered.to_numpy()
@@ -704,7 +704,7 @@ if __name__ == "__main__":
     print('load 2dc-nmr (c-c, c-x) file...')
     cnmr_2d_max_value = 450.0
     cnmr_2d_min_value = -400.0
-    twoD_nmr = pd.read_csv('./gp/qm9_all_raw_spe/2d_cnmr_ina_chsqc.csv')
+    twoD_nmr = pd.read_csv('./spectromol/qm9_all_raw_spe/2d_cnmr_ina_chsqc.csv')
     peak_columns = [col for col in twoD_nmr.columns if 'peak' in col]
     twoD_nmr[peak_columns] = (twoD_nmr[peak_columns] - cnmr_2d_min_value) / (cnmr_2d_max_value - cnmr_2d_min_value)
     twoD_nmr = twoD_nmr.to_numpy()
@@ -717,7 +717,7 @@ if __name__ == "__main__":
     print('load 1d h-nmr file...')
     nmrh_max_value = 12.0
     nmrh_min_value = -2.0
-    nmrh_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_hnmr.csv')
+    nmrh_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_hnmr.csv')
     peak_columns = [col for col in nmrh_spe_filtered.columns if 'peak' in col]
 
     # Filter H-NMR outliers - first identify abnormal samples, but do not normalize them
@@ -735,7 +735,7 @@ if __name__ == "__main__":
     # HSQC
     hsqc_max_value = 400.0
     hsqc_min_value = -350.0
-    hsqc = pd.read_csv('./gp/qm9_all_raw_spe/2d_hhsqc.csv')
+    hsqc = pd.read_csv('./spectromol/qm9_all_raw_spe/2d_hhsqc.csv')
     peak_columns = [col for col in hsqc.columns if 'peak' in col]
     hsqc[peak_columns] = (hsqc[peak_columns] - hsqc_min_value) / (hsqc_max_value - hsqc_min_value)
     hsqc = hsqc.to_numpy()
@@ -744,7 +744,7 @@ if __name__ == "__main__":
     # COSY
     cosy_max_value = 14.0
     cosy_min_value = -2.0
-    nmr_cosy = pd.read_csv('./gp/qm9_all_raw_spe/2d_hcosy.csv')
+    nmr_cosy = pd.read_csv('./spectromol/qm9_all_raw_spe/2d_hcosy.csv')
     hxyh_columns = [col for col in nmr_cosy.columns if 'H_X_Y_H' in col]
     nmr_cosy = nmr_cosy[hxyh_columns]
     peak_columns = [col for col in nmr_cosy.columns if 'peak' in col]
@@ -754,7 +754,7 @@ if __name__ == "__main__":
     # # J2D
     # j2d_max_value = 30.0
     # j2d_min_value = -30.0
-    # j2d = pd.read_csv('./gp/qm9_all_raw_spe/2d_h_j2d.csv')
+    # j2d = pd.read_csv('./spectromol/qm9_all_raw_spe/2d_h_j2d.csv')
     # j2d_columns = [col for col in j2d.columns if 'coupling' in col]
     # j2d = j2d[j2d_columns]
 
@@ -783,7 +783,7 @@ if __name__ == "__main__":
     # F-NMR
     fnmr_max_value = 0.0001
     fnmr_min_value = -400.0
-    nmrf_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_fnmr.csv')
+    nmrf_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_fnmr.csv')
     peak_columns = [col for col in nmrf_spe_filtered.columns if 'peak' in col]
     nmrf_spe_filtered[peak_columns] = (nmrf_spe_filtered[peak_columns] - fnmr_min_value) / (fnmr_max_value - fnmr_min_value)
     nmrf_spe_filtered = nmrf_spe_filtered.to_numpy()
@@ -791,7 +791,7 @@ if __name__ == "__main__":
     # N-NMR  
     nnmr_max_value = 400.0
     nnmr_min_value = -260.0
-    nmrn_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_nnmr.csv')
+    nmrn_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_nnmr.csv')
     peak_columns = [col for col in nmrn_spe_filtered.columns if 'peak' in col]
     nmrn_spe_filtered[peak_columns] = (nmrn_spe_filtered[peak_columns] - nnmr_min_value) / (nnmr_max_value - nnmr_min_value)
     nmrn_spe_filtered = nmrn_spe_filtered.to_numpy()
@@ -799,7 +799,7 @@ if __name__ == "__main__":
     # O-NMR
     onmr_max_value = 460.0
     onmr_min_value = -385.0
-    nmro_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_onmr.csv')
+    nmro_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_onmr.csv')
     peak_columns = [col for col in nmro_spe_filtered.columns if 'peak' in col]
     nmro_spe_filtered[peak_columns] = (nmro_spe_filtered[peak_columns] - onmr_min_value) / (onmr_max_value - onmr_min_value)
     nmro_spe_filtered = nmro_spe_filtered.to_numpy()
@@ -813,7 +813,7 @@ if __name__ == "__main__":
 
     # zhipu
     print('load high-mass file...')
-    mass = pd.read_csv('./gp/qm9_all_raw_spe/ms.csv')
+    mass = pd.read_csv('./spectromol/qm9_all_raw_spe/ms.csv')
     high_mass_spe = mass.to_numpy()
     print('high-mass_spe:', high_mass_spe.shape)
 
@@ -824,7 +824,7 @@ if __name__ == "__main__":
 
 
     # smiles
-    smiles_list = pd.read_csv('./gp/qm9_all_raw_spe/smiles.csv').values.tolist() ### [[smiles1], [smiles2], ...]
+    smiles_list = pd.read_csv('./spectromol/qm9_all_raw_spe/smiles.csv').values.tolist() ### [[smiles1], [smiles2], ...]
     smiles_lengths = [len(smiles[0]) for smiles in smiles_list]
     max_smiles_length = max(smiles_lengths)
     max_seq_length = max_smiles_length + 2
@@ -833,7 +833,7 @@ if __name__ == "__main__":
 
 
 
-    auxiliary_data = pd.read_csv('./gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
+    auxiliary_data = pd.read_csv('./spectromol/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
 
 
     columns = auxiliary_data.columns.tolist()
@@ -855,9 +855,9 @@ if __name__ == "__main__":
 
         
     # First read dataset split files
-    train_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/train.csv')
-    val_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/val.csv')
-    test_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/test.csv')
+    train_df = pd.read_csv(f'./spectromol/csv/dataset/{data_split_mode}/train.csv')
+    val_df = pd.read_csv(f'./spectromol/csv/dataset/{data_split_mode}/val.csv')
+    test_df = pd.read_csv(f'./spectromol/csv/dataset/{data_split_mode}/test.csv')
 
     # If there are abnormal samples, first remove corresponding SMILES from data split files
     if len(all_abnormal_indices) > 0:
@@ -1008,7 +1008,7 @@ if __name__ == "__main__":
         char2idx,
         idx2char,
         max_seq_length=100,
-        save_dir='./fangyang/gp/csv/corr_draw'  # Directory to save attention plots
+        save_dir='./fangyang/spectromol/csv/corr_draw'  # Directory to save attention plots
     )
 
     # print(f"Average BLEU score on test set: {avg_bleu_score}")
