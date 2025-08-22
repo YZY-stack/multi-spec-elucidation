@@ -35,7 +35,7 @@ spectromol/
 ├── __init__.py                          # Package initialization
 ├── dataset.py                           # Dataset classes and data loading utilities
 ├── model.py                            # Core model architecture definitions
-├── train_all.py                        # Main training script with data preprocessing
+├── train_all.py                        # Main training script with spectra data
 ├── train_at_new.py                     # Advanced training with auxiliary tasks
 ├── inference.py                        # Model inference and evaluation
 ├── inference_drug.py                   # Drug-specific inference pipeline

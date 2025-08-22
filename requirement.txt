@@ -1,0 +1,9 @@
+numpy
+pandas
+torch
+rdkit
+nltk
+seaborn
+Levenshtein
+scikit-learn
+tqdm

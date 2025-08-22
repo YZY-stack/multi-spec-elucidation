@@ -197,8 +197,8 @@ atomic_weights = {
 
 # def calculate_mol_weight_custom(mol):
 #     """
-#     使用自定义精确原子量计算分子量，
-#     若某原子不在 atomic_weights 中，则使用 RDKit 内置原子量作为后备。
+#     Calculate molecular weight using custom precise atomic weights,
+#     If an atom is not in atomic_weights, use RDKit built-in atomic weight as fallback.
 #     """
 #     if mol is None:
 #         return None
@@ -259,12 +259,12 @@ def calculate_dbe(mol: Chem.Mol) -> int:
 
 # def compute_atom_types(smiles):
 #     """
-#     利用 rdkit 计算分子的 DBE、精确分子量（对数归一化）以及前五周期各元素的计数，
-#     返回向量维度为：2 + len(atomic_weights)。
+#     Use rdkit to calculate molecular DBE, precise molecular weight (log normalized) and element counts for the first five periods,
+#     Return vector dimension: 2 + len(atomic_weights).
 #     """
 #     mol = Chem.MolFromSmiles(smiles)
 #     if mol is None:
-#         # 理论上此情况在数据预处理阶段已被过滤
+#         # Theoretically this case has been filtered in the data preprocessing stage
 #         return [0.0] * (2 + len(atomic_weights))
 #     dbe = calculate_dbe(mol)
 #     mol = Chem.AddHs(mol)

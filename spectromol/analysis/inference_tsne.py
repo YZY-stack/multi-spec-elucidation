@@ -86,7 +86,7 @@ def extract_transformer_memory(model,
 
         # Keep consistent with the model's tokenizer part
         features = {
-            # 如果你的模型用到 IR/Raman 就加入
+            # Add IR/Raman if your model uses them
             # "ir": ir_spectrum,
             # "raman": raman_spectrum,
             "nmr_c": c_spectrum,
@@ -98,8 +98,8 @@ def extract_transformer_memory(model,
             "mass_high": high_res_mass
         }
 
-        # 假设模型有一个 tokenizer，将不同谱信息变成 token embedding
-        tokens = model.tokenizer(features)  # [batch_size, seq_len, d_model] 之类
+        # Assume the model has a tokenizer that converts different spectral information into token embeddings
+        tokens = model.tokenizer(features)  # [batch_size, seq_len, d_model] etc.
 
         # 如果模型的 transformer_encoder 需要的是 [seq_len, batch_size, d_model]
         # 则需要做一个 permute

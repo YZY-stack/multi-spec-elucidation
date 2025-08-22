@@ -141,9 +141,9 @@ def inference_temperature_sampling(
 
         all_candidates = []
         
-        # 为每个样本生成候选
+        # Generate candidates for each sample in the batch  
         for b in range(batch_size):
-            # 取出第b个样本的memory和atom_types
+            # Obtain memory and atom types for the current sample
             mem_single = memory[:, b:b+1, :] # [src_len, 1, d_model]
             if atom_types is not None:
                 atom_single = atom_types[b:b+1, :] # [1, num_atom_types]
@@ -152,11 +152,11 @@ def inference_temperature_sampling(
             
             sample_candidates = []
             
-            # 使用不同温度生成候选
+            # Use temperature sampling to generate candidates
             for temperature in temperatures:
-                # 计算每个温度需要生成的候选数量
+                # Compute the number of candidates to generate for this temperature
                 candidates_per_temp = max(1, num_candidates // len(temperatures))
-                if temperature == temperatures[-1]:  # 最后一个温度生成剩余的候选
+                if temperature == temperatures[-1]:  # The last temperature may need to fill up to num_candidates
                     candidates_per_temp = num_candidates - len(sample_candidates)
                 
                 for _ in range(candidates_per_temp):
@@ -168,7 +168,7 @@ def inference_temperature_sampling(
                         max_seq_length, required_atom_counts[b], temperature, device
                     )
                     
-                    if candidate:  # 如果生成成功
+                    if candidate:  # if candidate is not empty
                         sample_candidates.append((candidate, temperature))
                 
                 if len(sample_candidates) >= num_candidates:
@@ -184,9 +184,9 @@ def generate_single_candidate_with_temperature(
     max_seq_length, required_atom_counts, temperature, device
 ):
     """
-    使用指定温度生成单个候选SMILES
+    Using the temperature sampling method to generate a single SMILES candidate.
     """
-    # 用<SOS>标记初始化输入序列
+    # <SOS> marker as the starting token
     tgt_indices = torch.full((1, 1), char2idx['<SOS>'], dtype=torch.long, device=device)
     
     generated_tokens = []
@@ -203,23 +203,21 @@ def generate_single_candidate_with_temperature(
         
         output_logits = output[-1, 0, :]  # [vocab_size]
         
-        # 应用原子约束
+        # apply constraints for temperature sampling
         valid_mask = apply_constraints_for_temperature_sampling(
             [t.item() for t in tgt_indices[:, 0]], char2idx, idx2char, required_atom_counts
         )
         
-        # 将无效token的logits设为负无穷
+        # set the invalid tokens to -inf
         masked_logits = output_logits.clone()
         for i, valid in enumerate(valid_mask):
             if not valid:
                 masked_logits[i] = float('-inf')
         
-        # 应用温度采样
+        # apply temperature scaling
         if temperature > 0:
             probs = F.softmax(masked_logits / temperature, dim=-1)
-            # 避免所有概率为0的情况
             if torch.sum(probs) == 0:
-                # 如果所有概率都是0，选择EOS token
                 next_token = torch.tensor([char2idx['<EOS>']], device=device)
             else:
                 next_token = torch.multinomial(probs, 1)
@@ -232,7 +230,7 @@ def generate_single_candidate_with_temperature(
         if next_token.item() == char2idx['<EOS>']:
             break
     
-    # 转换为SMILES字符串
+    # transform generated tokens to SMILES string
     tokens_list = []
     for idx in generated_tokens:
         if idx == char2idx['<EOS>']:
@@ -246,9 +244,9 @@ def generate_single_candidate_with_temperature(
 
 def apply_constraints_for_temperature_sampling(candidate_seq, char2idx, idx2char, required_atom_counts):
     """
-    对温度采样应用约束
+    apply constraints to the candidate sequence for temperature sampling
     """
-    # 将candidate_seq中去掉<PAD>,<SOS>,<EOS>
+    # remove <PAD>,<SOS>,<EOS> from candidate_seq
     seq_chars = []
     for t in candidate_seq:
         if t == char2idx['<EOS>']:
@@ -256,7 +254,7 @@ def apply_constraints_for_temperature_sampling(candidate_seq, char2idx, idx2char
         if t not in [char2idx['<PAD>'], char2idx['<SOS>']]:
             seq_chars.append(idx2char[t])
     
-    # 初始化valid_tokens
+    # initialize valid_tokens
     vocab_size = len(idx2char)
     valid_tokens = [True] * vocab_size
 
@@ -265,24 +263,24 @@ def apply_constraints_for_temperature_sampling(candidate_seq, char2idx, idx2char
         if tok in current_atom_counts:
             current_atom_counts[tok] += 1
 
-    # 原子计数约束
+    # check if current atom counts meet the required counts
     for atom, req_count in required_atom_counts.items():
         if current_atom_counts[atom] >= req_count:
             a_idx = char2idx[atom]
             valid_tokens[a_idx] = False
 
-    # 括号匹配
+    # make sure the sequence does not end with an open parenthesis '('
     open_p = seq_chars.count('(')
     close_p = seq_chars.count(')')
     if close_p >= open_p:
-        # 不能再生成')'
+        # cannot end with ')'
         rp_idx = char2idx.get(')', None)
         if rp_idx is not None:
             valid_tokens[rp_idx] = False
 
-    # 避免连续两个键('#','=')
+    # make sure the sequence does not end with a hash '#' or equal '='
     if len(seq_chars) > 0 and seq_chars[-1] in ['#','=']:
-        # 下个token不能是'#','='
+        # cannot end with '#' or '='
         hash_idx = char2idx['#']
         eq_idx = char2idx['=']
         valid_tokens[hash_idx] = False
@@ -293,14 +291,14 @@ def apply_constraints_for_temperature_sampling(candidate_seq, char2idx, idx2char
 
 def evaluate_candidates_and_select_best(true_smiles, candidates_with_temp):
     """
-    评估所有候选并选择最佳的预测结果
+    evaluate the candidates generated by temperature sampling and select the best one.
     
     Args:
-        true_smiles: 真实的SMILES字符串
-        candidates_with_temp: 候选列表，每个元素为(smiles, temperature)
+        true_smiles: real SMILES string for the sample
+        candidates_with_temp: candidates generated by temperature sampling, each candidate is a tuple (smiles, temperature)
     
     Returns:
-        dict: 包含最佳预测信息的字典
+        dict: containing the best predicted SMILES, its temperature, BLEU score, and number of unique predictions
     """
     smoothie = SmoothingFunction().method4
     best_bleu = -1
@@ -308,16 +306,13 @@ def evaluate_candidates_and_select_best(true_smiles, candidates_with_temp):
     best_temperature = 0
     unique_smiles = set()
     
-    # 评估每个候选
     for smiles, temp in candidates_with_temp:
         unique_smiles.add(smiles)
         
-        # 计算BLEU分数
         reference = [list(true_smiles)]
         candidate = list(smiles)
         bleu_score = sentence_bleu(reference, candidate, smoothing_function=smoothie)
         
-        # 如果这个候选更好，更新最佳结果
         if bleu_score > best_bleu:
             best_bleu = bleu_score
             best_smiles = smiles
@@ -336,7 +331,7 @@ def inference_with_temperature_sampling_analysis(model, dataloader, char2idx, id
                                                 temperatures=[0.6, 0.8, 1.0, 1.2, 1.5],
                                                 num_candidates=50):
     """
-    基于温度采样的推理并分析结果
+    Analyze the inference results using temperature sampling.
     """
     model.eval()
     
@@ -361,7 +356,6 @@ def inference_with_temperature_sampling_analysis(model, dataloader, char2idx, id
 
             batch_size = ir_spectrum.size(0)
 
-            # 获取真实SMILES
             true_smiles_list = []
             for i in range(batch_size):
                 true_indices = smiles_indices[i]
@@ -375,14 +369,12 @@ def inference_with_temperature_sampling_analysis(model, dataloader, char2idx, id
                 true_smiles_str = ''.join(true_smiles_tokens)
                 true_smiles_list.append(true_smiles_str)
 
-            # 准备原子计数约束
             atom_counts_array = atom_types[:, 1:].cpu().numpy()  # [batch_size, 4]
             required_atom_counts = []
             for counts in atom_counts_array:
                 req_dict = dict(zip(['C', 'N', 'O', 'F'], counts))
                 required_atom_counts.append(req_dict)
 
-            # 使用温度采样生成候选
             all_candidates = inference_temperature_sampling(
                 model,
                 ir_spectrum,
@@ -400,15 +392,12 @@ def inference_with_temperature_sampling_analysis(model, dataloader, char2idx, id
                 device=device
             )
 
-            # 处理每个样本的结果
             for i in range(batch_size):
                 true_smiles = true_smiles_list[i]
                 candidates_with_temp = all_candidates[i]
                 
-                # 评估候选并选择最佳
                 best_result = evaluate_candidates_and_select_best(true_smiles, candidates_with_temp)
                 
-                # 添加到结果列表
                 result = {
                     'sample_id': sample_id,
                     'true_smiles': true_smiles,
@@ -420,7 +409,6 @@ def inference_with_temperature_sampling_analysis(model, dataloader, char2idx, id
                 results.append(result)
                 sample_id += 1
 
-    # 保存结果到CSV
     csv_filename = os.path.join(save_dir, 'temperature_sampling_results.csv')
     with open(csv_filename, 'w', newline='') as csvfile:
         fieldnames = ['sample_id', 'true_smiles', 'best_predicted_smiles', 
@@ -430,12 +418,10 @@ def inference_with_temperature_sampling_analysis(model, dataloader, char2idx, id
         for result in results:
             writer.writerow(result)
     
-    # 保存详细结果到JSON（可选）
     json_filename = os.path.join(save_dir, 'temperature_sampling_results.json')
     with open(json_filename, 'w') as jsonfile:
         json.dump(results, jsonfile, indent=2)
-    
-    # 计算统计信息
+
     avg_bleu = np.mean([r['best_bleu_score'] for r in results])
     avg_unique = np.mean([r['num_unique_predictions'] for r in results])
     temp_distribution = Counter([r['best_temperature'] for r in results])
@@ -450,7 +436,6 @@ def inference_with_temperature_sampling_analysis(model, dataloader, char2idx, id
 
 
 def load_model(model_path, vocab_size, char2idx):
-    """加载模型"""
     model = AtomPredictionModel(vocab_size=vocab_size, count_tasks_classes=None, binary_tasks=None)
     model.to(device)
     model.load_state_dict(torch.load(model_path, map_location=device), True)
@@ -459,13 +444,13 @@ def load_model(model_path, vocab_size, char2idx):
 
 
 if __name__ == "__main__":
-    # 定义模型文件路径
+    # model path
     model_path = './fangyang/gp/csv/weights_scaffold_semantic_simple/best_semantic_supervised.pth'
     
-    # 加载模型
+    # load the model
     model = load_model(model_path, vocab_size, char2idx)
     
-    # 假设我们有一个预先定义的 SMILES 字符集
+    # SMILES vocabulary and size
     SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
                     'C', 'N', 'O', 'F',
                     '1', '2', '3', '4', '5',
@@ -473,11 +458,10 @@ if __name__ == "__main__":
                     ]
     vocab_size = len(SMILES_VOCAB)
 
-    # 创建字符到索引的映射和索引到字符的映射
+    # create character-to-index and index-to-character mappings
     char2idx = {token: idx for idx, token in enumerate(SMILES_VOCAB)}
     idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
-    # 加载数据（这里重用inference_drug.py中的数据加载代码）
     # uv
     print('load uv file...')
     uv_max_value = 15.0
@@ -522,7 +506,6 @@ if __name__ == "__main__":
     nmrh_spe_filtered = pd.read_csv('./gp/t50_drug_database/C0_to_C9_spin_H_NMR.csv')
     peak_columns = [col for col in nmrh_spe_filtered.columns if 'peak' in col]
 
-    # 过滤H-NMR异常值
     print('Filtering H-NMR samples with abnormal values...')
     threshold = 500.0
     nmrh_max_values = nmrh_spe_filtered[peak_columns].max(axis=1)
@@ -580,7 +563,7 @@ if __name__ == "__main__":
     nmrh_spe_filtered = np.concatenate((nmrh_spe_filtered, hsqc, nmr_cosy, nmrf_spe_filtered, nmrn_spe_filtered, nmro_spe_filtered), axis=1)
     print('nmrh_spe_filtered:', nmrh_spe_filtered.shape)
 
-    # 质量谱
+    # ms
     print('load high-mass file...')
     mass = pd.read_csv('./gp/t50_drug_database/MS.csv')
     high_mass_spe = mass.to_numpy()
@@ -598,19 +581,19 @@ if __name__ == "__main__":
     print(f"SMILES 序列的最大长度为：{max_smiles_length}")
     print(f"模型中应使用的 max_seq_length 为：{max_seq_length}")
 
-    # 辅助任务
+    # aux
     auxiliary_data = pd.read_csv('./gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
     columns = auxiliary_data.columns.tolist()
     auxiliary_tasks = [col for col in columns]
     print(f"Auxiliary tasks: {auxiliary_tasks}")
     print(f"Number of ATs: {len(auxiliary_tasks)}")
 
-    # 定义 count_tasks 和 binary_tasks
+    # count_tasks and binary_tasks
     count_tasks = [at for at in auxiliary_tasks if 'Has' not in at and 'Is' not in at]
     binary_tasks = [at for at in auxiliary_tasks if 'Has' in at or 'Is' in at]
 
-    # 数据准备（取一小部分进行测试）
-    test_size = min(100, len(nmrh_spe_filtered))  # 取前100个样本进行测试
+    # for debugging, we can limit the dataset size
+    test_size = min(100, len(nmrh_spe_filtered))  # use a smaller test size for debugging
     
     test_ir_spe_filtered = ir_spe_filtered[:test_size]
     test_uv_spe_filtered = uv_spe_filtered[:test_size]
@@ -620,7 +603,7 @@ if __name__ == "__main__":
     test_smiles_list = smiles_list[:test_size]
     atom_types_list_test = atom_type[:test_size]
 
-    # 创建测试集数据集
+    # test dataset
     test_dataset = SpectraDataset(
         ir_spectra=test_ir_spe_filtered,
         uv_spectra=test_uv_spe_filtered,
@@ -636,16 +619,16 @@ if __name__ == "__main__":
         atom_types_list=atom_types_list_test, 
     )
 
-    # 创建测试集数据加载器
+    # create DataLoader for the test dataset
     test_dataloader = DataLoader(
         test_dataset,
-        batch_size=16,  # 减小batch size以便处理
+        batch_size=16,  # smaller batch size for testing
         shuffle=False,
         num_workers=4,
         drop_last=False
     )
 
-    # 进行温度采样推理
+    # apply the model to the test dataset
     print("Starting temperature sampling inference...")
     results = inference_with_temperature_sampling_analysis(
         model,

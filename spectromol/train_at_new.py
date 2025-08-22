@@ -45,13 +45,13 @@ import math
 
 class SemanticSupervisedSMILESLoss(nn.Module):
     """
-    简化的SMILES损失函数，主要使用官能团惩罚进行语义监督
+    Simplified SMILES loss function, mainly using functional group penalty for semantic supervision
     """
     def __init__(self, ignore_index, functional_penalty_weight=0.05):
         super(SemanticSupervisedSMILESLoss, self).__init__()
         self.smiles_loss_fn = nn.CrossEntropyLoss(ignore_index=ignore_index)
         
-        # 官能团惩罚权重 - 较小的权重避免影响主任务稳定性
+        # Functional group penalty weight - smaller weight to avoid affecting main task stability
         self.functional_penalty_weight = functional_penalty_weight
     
     def forward(self, smiles_output, smiles_target, auxiliary_targets, count_task_outputs, 
@@ -106,13 +106,13 @@ class SemanticSupervisedSMILESLoss(nn.Module):
                 binary_tasks_used += 1
         
         if binary_tasks_used > 0:
-            binary_loss = binary_loss / binary_tasks_used  # 平均损失
+            binary_loss = binary_loss / binary_tasks_used  # Average loss
             total_auxiliary_loss += self.binary_weight * binary_loss
             num_aux_tasks += 1
         
-        # 总损失
+        # Total loss
         if num_aux_tasks > 0:
-            total_auxiliary_loss = total_auxiliary_loss / num_aux_tasks  # 平均辅助损失
+            total_auxiliary_loss = total_auxiliary_loss / num_aux_tasks  # Average auxiliary loss
             total_loss = smiles_loss + self.aux_weight * total_auxiliary_loss
         else:
             total_loss = smiles_loss
@@ -122,18 +122,18 @@ class SemanticSupervisedSMILESLoss(nn.Module):
 
 def get_adaptive_aux_weight(epoch, total_epochs, initial_weight=0.5, final_weight=0.1, decay_type='exponential'):
     """
-    自适应调整辅助任务权重
-    早期训练时辅助任务权重较大，帮助学习语义；后期权重减小，专注SMILES生成
+    Adaptively adjust auxiliary task weights
+    Higher auxiliary task weights in early training help learn semantics; lower weights in later stages focus on SMILES generation
     """
     if decay_type == 'exponential':
-        # 指数衰减
+        # Exponential decay
         decay_rate = math.log(final_weight / initial_weight) / total_epochs
         weight = initial_weight * math.exp(decay_rate * epoch)
     elif decay_type == 'linear':
-        # 线性衰减
+        # Linear decay
         weight = initial_weight - (initial_weight - final_weight) * epoch / total_epochs
     elif decay_type == 'cosine':
-        # 余弦衰减
+        # Cosine decay
         weight = final_weight + 0.5 * (initial_weight - final_weight) * (1 + math.cos(math.pi * epoch / total_epochs))
     else:
         weight = initial_weight
@@ -560,17 +560,8 @@ def predict_greedy(model, ir, uv, c_spec, h_spectrum, high_mass, char2idx, idx2c
 
 
 
-# 定义权重调节函数
+# Define weight adjustment function
 def get_smiles_weight(epoch, total_epochs, k=5):
-    """
-    计算 SMILES 损失的权重，基于指数增长。
-    Args:
-        epoch (int): 当前的训练轮次
-        total_epochs (int): 总训练轮次
-        k (float): 控制增长速率的参数
-    Returns:
-        float: SMILES 损失的权重
-    """
     return 1 - math.exp(-k * epoch / total_epochs)
 
 
@@ -580,7 +571,7 @@ def train_at(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader,
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    best_bleu_score = 0.0  # 用于保存最佳模型
+    best_bleu_score = 0.0  # For saving the best model
     feature_loss_fn = nn.MSELoss()
 
     for epoch in range(epochs):
@@ -627,10 +618,10 @@ def train_at(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader,
             # # Total loss
             # total_loss = loss_smiles_spectra
 
-            # 计算辅助任务损失
+            # Calculate auxiliary task loss
             total_auxiliary_loss = 0.0
 
-            # 计数任务
+            # Count tasks
             for idx, task in enumerate(count_tasks):
                 target = auxiliary_targets[:, idx].long()
                 logits = count_task_outputs[task]
@@ -701,18 +692,16 @@ def train_at(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader,
 def train_with_semantic_supervision(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, 
                                    epochs=10, save_dir='./model_weights_smiles', use_adaptive_weight=True):
     """
-    使用语义监督的训练函数，包含辅助任务损失
+    using semantic supervision to train the model with auxiliary tasks.
     """
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
     best_bleu_score = 0.0
     
-    # 使用语义监督损失函数
     if isinstance(smiles_loss_fn, SemanticSupervisedSMILESLoss):
         semantic_loss_fn = smiles_loss_fn
     else:
-        # 如果传入的是普通损失函数，创建语义监督版本
         ignore_index = char2idx['<PAD>']
         semantic_loss_fn = SemanticSupervisedSMILESLoss(ignore_index=ignore_index, aux_weight=0.1)
 
@@ -722,7 +711,6 @@ def train_with_semantic_supervision(model, smiles_loss_fn, optimizer, train_data
         smiles_loss_sum = 0
         aux_loss_sum = 0
         
-        # 自适应调整辅助任务权重
         if use_adaptive_weight:
             current_aux_weight = get_adaptive_aux_weight(epoch, epochs, initial_weight=0.5, final_weight=0.1)
             semantic_loss_fn.aux_weight = current_aux_weight
@@ -758,22 +746,19 @@ def train_with_semantic_supervision(model, smiles_loss_fn, optimizer, train_data
             output_flat = output_spectra.reshape(-1, output_spectra.size(-1))
             tgt_output_flat = tgt_output.reshape(-1)
 
-            # 计算语义监督损失
+            # compute semantic loss
             total_loss, smiles_loss, aux_loss = semantic_loss_fn(
                 output_flat, tgt_output_flat, auxiliary_targets, 
                 count_task_outputs, binary_task_outputs, count_tasks, binary_tasks
             )
 
-            # 反向传播和优化
             total_loss.backward()
             optimizer.step()
 
-            # 累积损失用于日志
             total_loss_sum += total_loss.item()
             smiles_loss_sum += smiles_loss.item()
             aux_loss_sum += aux_loss.item() if isinstance(aux_loss, torch.Tensor) else aux_loss
             
-            # 更新进度条
             avg_total_loss = total_loss_sum / (i + 1)
             avg_smiles_loss = smiles_loss_sum / (i + 1)
             avg_aux_loss = aux_loss_sum / (i + 1)
@@ -785,7 +770,7 @@ def train_with_semantic_supervision(model, smiles_loss_fn, optimizer, train_data
                 'Aux_W': f'{semantic_loss_fn.aux_weight:.3f}'
             })
 
-        # 每个 epoch 结束后在验证集上评估
+        # every epoch ends, print training summary
         print(f"\nEpoch [{epoch+1}/{epochs}] Training Summary:")
         print(f"  Total Loss: {avg_total_loss:.4f}")
         print(f"  SMILES Loss: {avg_smiles_loss:.4f}")
@@ -793,11 +778,11 @@ def train_with_semantic_supervision(model, smiles_loss_fn, optimizer, train_data
         print(f"  Auxiliary Weight: {semantic_loss_fn.aux_weight:.3f}")
         print(f"Starting validation...")
 
-        # 在验证集上评估
+        # evaluate on validation set
         val_metrics, val_aux_metrics = evaluate(
             epoch, model, val_dataloader, char2idx, idx2char, max_seq_length=max_seq_length)
         
-        # 打印主要指标
+        # print validation metrics
         for key, value in val_metrics.items():
             print(f"{key}: {value:.4f}")
 
@@ -809,81 +794,6 @@ def train_with_semantic_supervision(model, smiles_loss_fn, optimizer, train_data
             torch.save(model.state_dict(), os.path.join(save_dir, 'best_semantic_supervised.pth'))
 
 
-def train(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, epochs=10, save_dir='./model_weights_smiles'):
-    """
-    保持原有的训练函数作为向后兼容
-    """
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    best_bleu_score = 0.0
-
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0
-        progress_bar = tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{epochs}]", total=len(train_dataloader), ncols=100)
-        for i, (ir, uv, c_spec, h_spec, high_mass, smiles_indices, auxiliary_targets, atom_types) in enumerate(progress_bar):
-            # Move data to device
-            ir = ir.to(device)
-            uv = uv.to(device)
-            c_spec = c_spec.to(device)
-            h_spec = h_spec.to(device)
-            high_mass = high_mass.to(device)
-            smiles_indices = smiles_indices.to(device)
-            auxiliary_targets = auxiliary_targets.to(device)
-            atom_types = atom_types.to(device)
-
-            optimizer.zero_grad()
-
-            # Prepare target sequence
-            tgt_seq = smiles_indices.transpose(0, 1)[:-1]
-            tgt_output = smiles_indices.transpose(0, 1)[1:]
-
-            # Generate mask
-            seq_len = tgt_seq.size(0)
-            tgt_mask = model.smiles_decoder.generate_square_subsequent_mask(seq_len).to(device)
-
-            # Forward pass
-            output_spectra, attention, fusion_feat, count_task_outputs, binary_task_outputs = model(
-                ir, uv, c_spec, h_spec, high_mass, tgt_seq, tgt_mask, atom_types)
-
-            # Compute main task loss (from spectral features)
-            output_flat = output_spectra.reshape(-1, output_spectra.size(-1))
-            tgt_output_flat = tgt_output.reshape(-1)
-            loss_smiles_spectra = smiles_loss_fn(output_flat, tgt_output_flat)
-
-            # 总损失
-            total_loss = loss_smiles_spectra
-
-            # 反向传播和优化
-            total_loss.backward()
-            optimizer.step()
-
-            # 日志记录
-            avg_loss = total_loss.item() / (i + 1)
-            progress_bar.set_postfix({'Loss': avg_loss})
-
-        # 每个 epoch 结束后在验证集上评估
-        print(f"\nEpoch [{epoch+1}/{epochs}], Training Loss: {avg_loss:.4f}")
-        print(f"Epoch: {epoch+1}, starting validation...")
-
-        # 在验证集上评估
-        val_metrics, val_aux_metrics = evaluate(
-            epoch, model, val_dataloader, char2idx, idx2char, max_seq_length=max_seq_length)
-        for key, value in val_metrics.items():
-            print(f"{key}: {value:.4f}")
-
-        # Save best model
-        val_bleu_score = val_metrics['BLEU']
-        if val_bleu_score > best_bleu_score:
-            best_bleu_score = val_bleu_score
-            print(f"Current best model with BLEU Score: {best_bleu_score:.4f}")
-            torch.save(model.state_dict(), os.path.join(save_dir, 'tmp.pth'))
-
-
-
-
-
 import torch.nn.functional as F
 
 SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
@@ -893,7 +803,6 @@ SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
                 ]
 vocab_size = len(SMILES_VOCAB)
 
-# 创建字符到索引的映射和索引到字符的映射
 char2idx = {token: idx for idx, token in enumerate(SMILES_VOCAB)}
 idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
@@ -948,14 +857,14 @@ nmrh_min_value = -2.0
 nmrh_spe_filtered = pd.read_csv('./gp/qm9_all_raw_spe/1d_hnmr.csv')
 peak_columns = [col for col in nmrh_spe_filtered.columns if 'peak' in col]
 
-# 过滤H-NMR异常值 - 先识别异常样本，但不对其归一化
+# filter out samples with abnormal values
 print('Filtering H-NMR samples with abnormal values...')
 threshold = 500.0
 nmrh_max_values = nmrh_spe_filtered[peak_columns].max(axis=1)
 h_nmr_abnormal_mask = nmrh_max_values > threshold
 h_nmr_abnormal_indices = set(np.where(h_nmr_abnormal_mask)[0])
 
-# 使用你设定的min和max值进行归一化（对所有样本，包括异常样本，但异常样本稍后会被过滤掉）
+# using the mask to filter out abnormal samples
 nmrh_spe_filtered[peak_columns] = (nmrh_spe_filtered[peak_columns] - nmrh_min_value) / (nmrh_max_value - nmrh_min_value)
 nmrh_spe_filtered = nmrh_spe_filtered.to_numpy()
 
@@ -1037,51 +946,15 @@ smiles_list = pd.read_csv('./gp/qm9_all_raw_spe/smiles.csv').values.tolist() ###
 smiles_lengths = [len(smiles[0]) for smiles in smiles_list]
 max_smiles_length = max(smiles_lengths)
 max_seq_length = max_smiles_length + 2
-print(f"SMILES 序列的最大长度为：{max_smiles_length}")
-print(f"模型中应使用的 max_seq_length 为：{max_seq_length}")
-
-
-# 获取所有辅助任务
-# # Get the list of columns
-# # auxiliary_data = pd.read_csv('./fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task_canonical.csv')
-# auxiliary_data = pd.read_csv('./fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task.csv')
-# columns = auxiliary_data.columns.tolist()
-# # Exclude 'smiles' and 'id' columns to get auxiliary tasks
-# auxiliary_tasks = [col for col in columns if col not in ['smiles', 'id']]
-# print(f"Auxiliary tasks: {auxiliary_tasks}")
+print(f"max_seq_length：{max_seq_length}")
 
 
 
-# file_prefixes = {
-#     "c_nmr": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/C_NMR_TA.csv',
-#     "h_nmr": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/H_NMR_TA.csv',
-#     # "ir": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/IR_TA.csv',
-#     "ms": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/MS_TA.csv',
-# }
-# auxiliary_data = pd.DataFrame()
-# for prefix, filepath in file_prefixes.items():
-#     df = pd.read_csv(filepath).iloc[:, 3:]
-#     df.columns = [f"{prefix}_{col}" for col in df.columns]
-#     auxiliary_data = pd.concat([auxiliary_data, df], axis=1)
-
-
+# load auxiliary tasks
 auxiliary_data = pd.read_csv('./gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
-
 
 columns = auxiliary_data.columns.tolist()
 auxiliary_tasks = [col for col in columns]
-# auxiliary_tasks = ['ring_count']
-
-# 从 auxiliary_data 中筛选包含 "ring" 的列
-# ring_columns = [col for col in auxiliary_data.columns if "ring" in col.lower()]
-# ring_columns = [
-#     "c_nmr_Ring_size1", "c_nmr_Ring_size2", "c_nmr_Ring_size3", "c_nmr_Ring_size4", "c_nmr_Ring_size5", "c_nmr_Ring_size6",
-#     "h_nmr_H_connected_ring_size1", "h_nmr_H_connected_ring_size2", "h_nmr_H_connected_ring_size3", "h_nmr_H_connected_ring_size4", "h_nmr_H_connected_ring_size5", "h_nmr_H_connected_ring_size6", "h_nmr_H_connected_ring_size7", "h_nmr_H_connected_ring_size8",
-# ]
-# # 只保留带有 "ring" 的特征
-# auxiliary_data = auxiliary_data[ring_columns]
-# # 更新 auxiliary_tasks 列表
-# auxiliary_tasks = ring_columns
 print(f"Auxiliary tasks: {auxiliary_tasks}")
 print(f"Number of ATs: {len(auxiliary_tasks)}")
 
@@ -1102,16 +975,15 @@ def get_indices(smiles_series, smiles_to_index):
 
     
 
-# 先读取数据集划分文件
+# split dataset
 train_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/train.csv')
 val_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/val.csv')
 test_df = pd.read_csv(f'./gp/csv/dataset/{data_split_mode}/test.csv')
 
-# 如果有异常样本，先从数据划分文件中移除对应的SMILES
+# process abnormal samples
 if len(all_abnormal_indices) > 0:
     print(f"Processing {len(all_abnormal_indices)} abnormal samples...")
     
-    # 获取异常样本对应的SMILES
     abnormal_smiles = set()
     for idx in all_abnormal_indices:
         if idx < len(smiles_list):
@@ -1119,7 +991,7 @@ if len(all_abnormal_indices) > 0:
     
     print(f"Found {len(abnormal_smiles)} unique abnormal SMILES")
     
-    # 从各个数据集中移除异常SMILES
+    # reset indices for train, val, test sets
     original_train_size = len(train_df)
     original_val_size = len(val_df)
     original_test_size = len(test_df)
@@ -1132,12 +1004,10 @@ if len(all_abnormal_indices) > 0:
     print(f"Val set: {original_val_size} -> {len(val_df)} (removed {original_val_size - len(val_df)})")
     print(f"Test set: {original_test_size} -> {len(test_df)} (removed {original_test_size - len(test_df)})")
     
-    # 然后过滤原始数据
     total_samples = len(smiles_list)
     normal_mask = np.ones(total_samples, dtype=bool)
     normal_mask[all_abnormal_indices] = False
     
-    # 过滤所有数组
     ir_spe_filtered = ir_spe_filtered[normal_mask]
     uv_spe_filtered = uv_spe_filtered[normal_mask]
     nmrh_spe_filtered = nmrh_spe_filtered[normal_mask]
@@ -1145,7 +1015,6 @@ if len(all_abnormal_indices) > 0:
     high_mass_spe = high_mass_spe[normal_mask]
     atom_type = atom_type[normal_mask]
     
-    # 使用原始的smiles_list创建过滤后的列表
     original_smiles_list = smiles_list.copy()
     smiles_list = [original_smiles_list[i] for i in range(total_samples) if normal_mask[i]]
     auxiliary_data = auxiliary_data[normal_mask].reset_index(drop=True)
@@ -1153,19 +1022,17 @@ if len(all_abnormal_indices) > 0:
     print(f"Filtered dataset: {total_samples} -> {len(smiles_list)} samples")
 
 print(f"Final dataset size: {len(smiles_list)}")
-print(f"确保数据一致性检查...")
 assert len(smiles_list) == len(auxiliary_data) == ir_spe_filtered.shape[0], "Data length mismatch after filtering!"
 
-# 创建 SMILES 到索引的映射
+# create a mapping from SMILES to index
 smiles_to_index = {smiles[0]: idx for idx, smiles in enumerate(smiles_list)}
 
-# 4. 获取各数据集的索引
 train_indices, train_missing_smiles = get_indices(train_df['smiles'], smiles_to_index)
 val_indices, val_missing_smiles = get_indices(val_df['smiles'], smiles_to_index)
 test_indices, test_missing_smiles = get_indices(test_df['smiles'], smiles_to_index)
 
 
-# 划分训练集数据
+# train
 train_ir_spe_filtered = ir_spe_filtered[train_indices]
 train_uv_spe_filtered = uv_spe_filtered[train_indices]
 train_nmrh_spe_filtered = nmrh_spe_filtered[train_indices]
@@ -1177,7 +1044,7 @@ atom_types_list_train = atom_type[train_indices]
 
 
 
-# 划分验证集数据
+# val
 val_ir_spe_filtered = ir_spe_filtered[val_indices]
 val_uv_spe_filtered = uv_spe_filtered[val_indices]
 val_nmrh_spe_filtered = nmrh_spe_filtered[val_indices]
@@ -1187,7 +1054,7 @@ val_smiles_list = [smiles_list[idx] for idx in val_indices]
 val_aux_data = auxiliary_data.iloc[val_indices].reset_index(drop=True)
 atom_types_list_val = atom_type[val_indices]
 
-# 划分测试集数据
+# test
 test_ir_spe_filtered = ir_spe_filtered[test_indices]
 test_uv_spe_filtered = uv_spe_filtered[test_indices]
 test_nmrh_spe_filtered = nmrh_spe_filtered[test_indices]
@@ -1199,12 +1066,12 @@ atom_types_list_test = atom_type[test_indices]
 
 
 
-# 定义 count_tasks 和 binary_tasks
+# count_tasks and binary_tasks
 count_tasks = [at for at in auxiliary_tasks if 'Has' not in at and 'Is' not in at]
 binary_tasks = [at for at in auxiliary_tasks if 'Has' in at or 'Is' in at]
 
 
-# 创建训练集数据集
+# train
 train_dataset = SpectraDataset(
     ir_spectra=train_ir_spe_filtered,
     uv_spectra=train_uv_spe_filtered,
@@ -1220,7 +1087,7 @@ train_dataset = SpectraDataset(
     atom_types_list=atom_types_list_train, 
 )
 
-# 创建验证集数据集
+# val
 val_dataset = SpectraDataset(
     ir_spectra=val_ir_spe_filtered,
     uv_spectra=val_uv_spe_filtered,
@@ -1236,7 +1103,7 @@ val_dataset = SpectraDataset(
     atom_types_list=atom_types_list_val, 
 )
 
-# 创建测试集数据集
+# test
 test_dataset = SpectraDataset(
     ir_spectra=test_ir_spe_filtered,
     uv_spectra=test_uv_spe_filtered,
@@ -1255,7 +1122,7 @@ test_dataset = SpectraDataset(
 
 from torch.utils.data import DataLoader
 
-# 创建训练集数据加载器
+# train loader
 train_dataloader = DataLoader(
     train_dataset, 
     batch_size=128,
@@ -1264,7 +1131,7 @@ train_dataloader = DataLoader(
     pin_memory=True
 )
 
-# 创建验证集数据加载器
+# val loader
 val_dataloader = DataLoader(
     val_dataset,
     batch_size=128, 
@@ -1273,7 +1140,7 @@ val_dataloader = DataLoader(
     drop_last=True,
 )
 
-# 创建测试集数据加载器（如果需要）
+# test loader
 test_dataloader = DataLoader(
     test_dataset,
     batch_size=1,
@@ -1285,27 +1152,18 @@ test_dataloader = DataLoader(
 
 
 
-# 计算每个计数任务的类别数
+# compute count_task_classes
 count_task_classes = {}
 for task in count_tasks:
     max_value = int(auxiliary_data[task].max())
-    count_task_classes[task] = max_value + 1  # 类别数
+    count_task_classes[task] = max_value + 1  # number of classes is max value + 1
 
-
-
-# # 实例化模型时，传递 count_task_classes
-# model = AtomPredictionModel(vocab_size, count_task_classes, binary_tasks).to(device)
 
 
 def load_model(model_path, vocab_size, char2idx):
-    """
-    加载预训练模型
-    """
-    # 初始化模型
     model = AtomPredictionModel(vocab_size=vocab_size, count_tasks_classes=None, binary_tasks=None)
     model.to(device)
 
-    # 加载模型权重
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
@@ -1321,10 +1179,10 @@ def load_model(model_path, vocab_size, char2idx):
 #         nn.init.uniform_(m.weight, -0.1, 0.1)
 # model.apply(init_weights)
 
- # 定义模型文件路径
+ # load the model from the trained weights from the previous training
 model_path = './fangyang/gp/csv/weights_scaffold_at/0806_ft.pth'
 
-# 加载模型
+# load
 model = load_model(model_path, vocab_size, char2idx)
 
 # criterion = ContrastiveLoss()
@@ -1334,50 +1192,30 @@ criterion = SMILESLoss(ignore_index)
 
 count_task_loss_fn = nn.CrossEntropyLoss()
 binary_task_loss_fn = nn.BCEWithLogitsLoss()
-
-# 定义优化器，仅优化新增的 count_task_heads 和 binary_task_heads
-# trainable_params = [param for name, param in model.named_parameters() if param.requires_grad]
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 
+# using semantic supervision
+ignore_index = char2idx['<PAD>']
+semantic_criterion = SemanticSupervisedSMILESLoss(
+    ignore_index=ignore_index, 
+    aux_weight=0.2,  # auxiliary task weight
+    count_weight=1.0,  # weight for count tasks
+    binary_weight=1.0  # weight for binary tasks
+)
 
-# 选择训练方式
-use_semantic_supervision = True  # 设置为True使用语义监督，False使用原始训练
+print("🚀 start training")
+print(f"📊 count task: {semantic_criterion.important_count_tasks}")
+print(f"🔢 binary task: {semantic_criterion.important_binary_tasks}")
 
-if use_semantic_supervision:
-    # 使用语义监督的损失函数
-    ignore_index = char2idx['<PAD>']
-    semantic_criterion = SemanticSupervisedSMILESLoss(
-        ignore_index=ignore_index, 
-        aux_weight=0.2,  # 辅助任务权重
-        count_weight=1.0,  # 计数任务权重
-        binary_weight=1.0  # 二元任务权重
-    )
-    
-    print("🚀 开始使用语义监督的训练...")
-    print(f"📊 重要的计数任务: {semantic_criterion.important_count_tasks}")
-    print(f"🔢 重要的二元任务: {semantic_criterion.important_binary_tasks}")
-    
-    # Train the model with semantic supervision
-    train_with_semantic_supervision(
-        model,
-        semantic_criterion,
-        optimizer,
-        train_dataloader,
-        val_dataloader,
-        epochs=1000,
-        save_dir=f'./fangyang/gp/csv/weights_{data_split_mode}_semantic',
-        use_adaptive_weight=True  # 使用自适应权重调整
-    )
-else:
-    # 使用原始训练函数（仅SMILES损失）
-    print("📚 使用原始训练方式（仅SMILES损失）...")
-    train(
-        model,
-        criterion,
-        optimizer,
-        train_dataloader,
-        val_dataloader,
-        epochs=1000,
-        save_dir=f'./fangyang/gp/csv/weights_{data_split_mode}_original'
-    )
+# Train the model with semantic supervision
+train_with_semantic_supervision(
+    model,
+    semantic_criterion,
+    optimizer,
+    train_dataloader,
+    val_dataloader,
+    epochs=1000,
+    save_dir=f'./fangyang/gp/csv/weights_{data_split_mode}_semantic',
+    use_adaptive_weight=True  # using adaptive weight for auxiliary tasks
+)

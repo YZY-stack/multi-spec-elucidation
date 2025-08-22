@@ -832,50 +832,12 @@ if __name__ == "__main__":
     print(f"max_seq_length to be used in the model: {max_seq_length}")
 
 
-    # Get all auxiliary tasks
-    # # Get the list of columns
-    # # auxiliary_data = pd.read_csv('./fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task_canonical.csv')
-    # auxiliary_data = pd.read_csv('./fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task.csv')
-    # columns = auxiliary_data.columns.tolist()
-    # # Exclude 'smiles' and 'id' columns to get auxiliary tasks
-    # auxiliary_tasks = [col for col in columns if col not in ['smiles', 'id']]
-    # print(f"Auxiliary tasks: {auxiliary_tasks}")
-
-
-
-    # file_prefixes = {
-    #     "c_nmr": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/C_NMR_TA.csv',
-    #     "h_nmr": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/H_NMR_TA.csv',
-    #     # "ir": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/IR_TA.csv',
-    #     "ms": './fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/MS_TA.csv',
-    # }
-    # auxiliary_data = pd.DataFrame()
-    # for prefix, filepath in file_prefixes.items():
-    #     df = pd.read_csv(filepath).iloc[:, 3:]
-    #     df.columns = [f"{prefix}_{col}" for col in df.columns]
-    #     auxiliary_data = pd.concat([auxiliary_data, df], axis=1)
-
 
     auxiliary_data = pd.read_csv('./gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
 
 
     columns = auxiliary_data.columns.tolist()
     auxiliary_tasks = [col for col in columns]
-    # auxiliary_tasks = ['ring_count']
-
-    # Filter columns containing "ring" from auxiliary_data
-    # ring_columns = [col for col in auxiliary_data.columns if "ring" in col.lower()]
-    # ring_columns = [
-    #     "c_nmr_Ring_size1", "c_nmr_Ring_size2", "c_nmr_Ring_size3", "c_nmr_Ring_size4", "c_nmr_Ring_size5", "c_nmr_Ring_size6",
-    #     "h_nmr_H_connected_ring_size1", "h_nmr_H_connected_ring_size2", "h_nmr_H_connected_ring_size3", "h_nmr_H_connected_ring_size4", "h_nmr_H_connected_ring_size5", "h_nmr_H_connected_ring_size6", "h_nmr_H_connected_ring_size7", "h_nmr_H_connected_ring_size8",
-    # ]
-    # # Only keep features with "ring"
-    # auxiliary_data = auxiliary_data[ring_columns]
-    # # Update auxiliary_tasks list
-    # auxiliary_tasks = ring_columns
-    print(f"Auxiliary tasks: {auxiliary_tasks}")
-    print(f"Number of ATs: {len(auxiliary_tasks)}")
-
 
 
 
@@ -970,7 +932,8 @@ if __name__ == "__main__":
     test_nmrc_spe_filtered = nmrc_spe_filtered[test_indices]
     test_high_mass_spe = high_mass_spe[test_indices]
     test_smiles_list = [smiles_list[idx] for idx in test_indices]
-    test_aux_data = auxiliary_data.iloc[test_indices].reset_index(drop=True)    atom_types_list_test = atom_type[test_indices]
+    test_aux_data = auxiliary_data.iloc[test_indices].reset_index(drop=True)    
+    atom_types_list_test = atom_type[test_indices]
 
 
     # Define count_tasks and binary_tasks

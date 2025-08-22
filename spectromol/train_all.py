@@ -72,215 +72,6 @@ def get_smiles_weight(epoch, total_epochs, k=5):
 
 
 
-def evaluate_at(epoch, model, dataloader, char2idx, idx2char, max_seq_length=100):
-    """
-    Evaluate model with auxiliary tasks during training.
-    
-    Args:
-        epoch: Current epoch number
-        model: The model to evaluate
-        dataloader: Validation dataloader
-        char2idx: Character to index mapping
-        idx2char: Index to character mapping
-        max_seq_length: Maximum sequence length for generation
-        
-    Returns:
-        Tuple of (main_metrics, auxiliary_metrics)
-    """
-    model.eval()
-    samples = []
-    total_bleu_score = 0.0
-    total_cos_score = 0.0
-    total_correct = 0
-    total_smiles = 0
-    bad_sm_count = 0
-    n_exact = 0
-    maccs_sim, rdk_sim, morgan_sim, levs = [], [], [], []
-
-    # Initialize auxiliary task metrics
-    count_task_true = {task: [] for task in count_tasks}
-    count_task_pred = {task: [] for task in count_tasks}
-    binary_task_true = {task: [] for task in binary_tasks}
-    binary_task_pred = {task: [] for task in binary_tasks}
-
-    smoothie = SmoothingFunction().method4
-
-    with torch.no_grad():
-        for i, (ir, uv, c_spec, h_spec, high_mass, smiles_indices, auxiliary_targets, atom_types) in enumerate(
-                tqdm(dataloader, desc="Evaluating", ncols=100)):
-            # Move data to device
-            ir, uv, c_spec, h_spec = ir.to(device), uv.to(device), c_spec.to(device), h_spec.to(device)
-            high_mass, smiles_indices = high_mass.to(device), smiles_indices.to(device)
-            auxiliary_targets, atom_types = auxiliary_targets.to(device), atom_types.to(device)
-            batch_size = ir.size(0)
-
-            # Get true SMILES
-            true_smiles_list = []
-            for j in range(batch_size):
-                true_indices = smiles_indices[j]
-                true_smiles_tokens = []
-                for idx in true_indices:
-                    idx = idx.item()
-                    if idx == char2idx['<EOS>']:
-                        break
-                    elif idx not in [char2idx['<PAD>'], char2idx['<SOS>']]:
-                        true_smiles_tokens.append(idx2char.get(idx, '<UNK>'))
-                true_smiles_str = ''.join(true_smiles_tokens)
-                true_smiles_list.append(true_smiles_str)
-
-
-            # Greedy prediction
-            predicted_smiles_list = predict_greedy(
-                model, ir, uv, c_spec, h_spec, high_mass,
-                char2idx, idx2char, max_seq_length=max_seq_length, atom_types=atom_types)
-
-
-
-            for true_smiles_str, predicted_smiles_str in zip(true_smiles_list, predicted_smiles_list):
-                # For validity
-                try:
-                    tmp = Chem.CanonSmiles(predicted_smiles_str)
-                except:
-                    bad_sm_count += 1
-
-                try:
-                    mol_output = Chem.MolFromSmiles(predicted_smiles_str)
-                    mol_gt = Chem.MolFromSmiles(true_smiles_str)
-                    if Chem.MolToInchi(mol_output) == Chem.MolToInchi(mol_gt):
-                        n_exact += 1
-                    maccs_sim.append(DataStructs.FingerprintSimilarity(MACCSkeys.GenMACCSKeys(mol_output), MACCSkeys.GenMACCSKeys(mol_gt), metric=DataStructs.TanimotoSimilarity))
-                    rdk_sim.append(DataStructs.FingerprintSimilarity(Chem.RDKFingerprint(mol_output), Chem.RDKFingerprint(mol_gt), metric=DataStructs.TanimotoSimilarity))
-                    morgan_sim.append(DataStructs.TanimotoSimilarity(AllChem.GetMorganFingerprint(mol_output, 2), AllChem.GetMorganFingerprint(mol_gt, 2)))
-                except:
-                    pass
-
-                # Compute BLEU score
-                reference = [list(true_smiles_str)]
-                candidate = list(predicted_smiles_str)
-                bleu_score = sentence_bleu(reference, candidate, smoothing_function=smoothie)
-                total_bleu_score += bleu_score
-
-                # Compute SMILES accuracy
-                try:
-                    tmp_1 = Chem.CanonSmiles(predicted_smiles_str)
-                    tmp_2 = Chem.CanonSmiles(true_smiles_str)
-                    if tmp_1 == tmp_2:
-                        total_correct += 1
-                except:
-                    if predicted_smiles_str == true_smiles_str:
-                        total_correct += 1
-                total_smiles += 1
-
-                # Compute Cos-sim
-                cos_sim = cosine_similarity(predicted_smiles_str, true_smiles_str)
-                total_cos_score += cos_sim
-
-                # Compute L-Distance
-                l_dis = lev(predicted_smiles_str, true_smiles_str)
-                levs.append(l_dis)
-
-
-            # Get auxiliary task predictions
-            # Prepare dummy target sequence (only for getting auxiliary outputs)
-            tgt_seq = torch.full((1, batch_size), char2idx['<SOS>'], dtype=torch.long, device=device)
-            tgt_mask = model.smiles_decoder.generate_square_subsequent_mask(1).to(device)
-
-
-            _, _, _, count_task_outputs, binary_task_outputs = model(
-                ir, uv, c_spec, h_spec, high_mass, tgt_seq, tgt_mask, atom_types=atom_types)
-
-            # Collect auxiliary task predictions and true values
-            # Count tasks
-            for idx_task, task in enumerate(count_tasks):
-                target = auxiliary_targets[:, idx_task].cpu().numpy()  # Shape: [batch_size]
-                logits = count_task_outputs[task]  # Shape: [batch_size, num_classes]
-                predictions = logits.argmax(dim=1).cpu().numpy()  # Shape: [batch_size]
-                count_task_true[task].extend(target)
-                count_task_pred[task].extend(predictions)
-
-            # Binary tasks
-            for idx_task, task in enumerate(binary_tasks):
-                target = auxiliary_targets[:, len(count_tasks) + idx_task].cpu().numpy()
-                logit = binary_task_outputs[task]
-                predictions = (torch.sigmoid(logit) > 0.5).int().cpu().numpy()
-                binary_task_true[task].extend(target)
-                binary_task_pred[task].extend(predictions)
-
-
-
-        avg_bleu_score = total_bleu_score / total_smiles
-        accuracy = total_correct / total_smiles
-        # Compute validity
-        validity  = (total_smiles - bad_sm_count) / total_smiles
-        cos_sim_all = total_cos_score / total_smiles
-        exact = n_exact * 1.0 / total_smiles
-
-
-        results_dict = {
-            'BLEU': avg_bleu_score,
-            'validity': validity,
-            'Levenshtein': np.mean(levs),
-            'Cosine Similarity': cos_sim_all,
-            'Top1 Acc': accuracy,
-            'Exact': exact,
-            "MACCS FTS": np.mean(maccs_sim),
-            "RDKit FTS": np.mean(rdk_sim),
-            "Morgan FTS": np.mean(morgan_sim),
-        }
-
-        # Compute auxiliary task metrics
-        from sklearn.metrics import accuracy_score, mean_absolute_error
-
-        count_task_acc = {}
-        count_task_mae = {}
-        for task in count_tasks:
-            y_true = count_task_true[task]
-            y_pred = count_task_pred[task]
-            acc = accuracy_score(y_true, y_pred)
-            mae = mean_absolute_error(y_true, y_pred)
-            count_task_acc[task] = acc
-            count_task_mae[task] = mae
-
-        binary_task_acc = {}
-        for task in binary_tasks:
-            y_true = binary_task_true[task]
-            y_pred = binary_task_pred[task]
-            acc = accuracy_score(y_true, y_pred)
-            binary_task_acc[task] = acc
-
-        # # Display sample results
-        # for i, sample in enumerate(samples):
-        #     print(f"\nSample {i+1}:")
-        #     print(f"True SMILES: {sample['True SMILES']}")
-        #     print(f"Predicted SMILES: {sample['Predicted SMILES']}")
-        #     print(f"BLEU Score: {sample['BLEU Score']:.4f}")
-        #     print("Auxiliary Task Predictions:")
-        #     for task in count_tasks + binary_tasks:
-        #         true_value = sample['Auxiliary True'][task]
-        #         predicted_value = sample['Auxiliary Predicted'][task]
-        #         print(f"  {task}: True = {true_value}, Predicted = {predicted_value}")
-        #     print("-" * 50)
-
-        # Return metrics
-        val_aux_metrics = {
-            'count_task_acc': 0,
-            'count_task_mae': 0,
-            'binary_task_acc': 0,
-        }
-
-
-        # if epoch % 10 == 0:
-        #     os.makedirs(f"./results_new/", exist_ok=True)
-        #     with open(f"results_new/epoch_{epoch}_results.csv", 'w', newline='') as file:
-        #         writer = csv.DictWriter(file, fieldnames=['pred_smiles', 'true_smiles', 'BLEU'])
-        #         writer.writeheader()
-        #         writer.writerows(results)
-
-        return results_dict, val_aux_metrics
-        # return avg_bleu_score, accuracy, val_aux_metrics
-
-
-
 def evaluate(epoch, model, dataloader, char2idx, idx2char, max_seq_length=100):
     model.eval()
     samples = []
@@ -474,122 +265,6 @@ def predict_greedy(model, ir, uv, c_spec, h_spectrum, high_mass, char2idx, idx2c
             generated_smiles.append(smiles_str)
 
         return generated_smiles
-
-
-
-
-
-
-
-
-
-
-def train_at(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, epochs=10, save_dir='./model_weights_smiles'):
-    """
-    Train model with auxiliary tasks.
-    
-    Args:
-        model: The model to train
-        smiles_loss_fn: Loss function for SMILES generation
-        optimizer: Optimizer for training
-        train_dataloader: Training data loader
-        val_dataloader: Validation data loader
-        epochs: Number of training epochs
-        save_dir: Directory to save model weights
-    """
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    best_bleu_score = 0.0
-    feature_loss_fn = nn.MSELoss()
-
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0
-        progress_bar = tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{epochs}]", 
-                          total=len(train_dataloader), ncols=100)
-        
-        for i, (ir, uv, c_spec, h_spec, high_mass, smiles_indices, auxiliary_targets, atom_types) in enumerate(progress_bar):
-            # Move data to device
-            ir, uv, c_spec, h_spec = ir.to(device), uv.to(device), c_spec.to(device), h_spec.to(device)
-            high_mass, smiles_indices = high_mass.to(device), smiles_indices.to(device)
-            auxiliary_targets, atom_types = auxiliary_targets.to(device), atom_types.to(device)
-
-            optimizer.zero_grad()
-
-            # Prepare target sequences
-            tgt_seq = smiles_indices.transpose(0, 1)[:-1]
-            tgt_output = smiles_indices.transpose(0, 1)[1:]
-
-            # Generate mask
-            seq_len = tgt_seq.size(0)
-            tgt_mask = model.smiles_decoder.generate_square_subsequent_mask(seq_len).to(device)
-
-            # Forward pass
-            output_spectra, output_mol, spectra_feat, count_task_outputs, binary_task_outputs = model(
-                ir, uv, c_spec, h_spec, high_mass, tgt_seq, tgt_mask, atom_types)
-
-            # Compute main task loss
-            output_flat = output_spectra.reshape(-1, output_spectra.size(-1))
-            tgt_output_flat = tgt_output.reshape(-1)
-            loss_smiles_spectra = smiles_loss_fn(output_flat, tgt_output_flat)
-
-            # Compute auxiliary task losses
-            total_auxiliary_loss = 0.0
-
-            # Count tasks
-            for idx, task in enumerate(count_tasks):
-                target = auxiliary_targets[:, idx].long()
-                logits = count_task_outputs[task]
-                loss = nn.CrossEntropyLoss()(logits, target)
-                total_auxiliary_loss += loss
-
-            # Binary classification tasks
-            for idx, task in enumerate(binary_tasks):
-                target = auxiliary_targets[:, len(count_tasks) + idx].float()
-                logit = binary_task_outputs[task]
-                loss = nn.BCEWithLogitsLoss()(logit, target)
-                total_auxiliary_loss += loss
-
-            # Total loss
-            total_loss = loss_smiles_spectra + 0.1 * total_auxiliary_loss
-
-            # Backward pass and optimization
-            total_loss.backward()
-            optimizer.step()
-
-            # Update progress bar
-            avg_loss = total_loss.item() / (i + 1)
-            progress_bar.set_postfix({'Loss': avg_loss})
-
-        # Validation at epoch end
-        print(f"\nEpoch [{epoch+1}/{epochs}], Training Loss: {avg_loss:.4f}")
-        print(f"Epoch: {epoch+1}, starting validation...")
-
-        val_metrics, val_aux_metrics = evaluate(
-            epoch, model, val_dataloader, char2idx, idx2char, max_seq_length=max_seq_length)
-        
-        for key, value in val_metrics.items():
-            print(f"{key}: {value:.4f}")
-
-        # Print auxiliary task metrics
-        print("\nValidation Auxiliary Task Metrics:")
-        for task in count_tasks:
-            acc = val_aux_metrics['count_task_acc'][task]
-            mae = val_aux_metrics['count_task_mae'][task]
-            if acc < 0.9:
-                print(f"Count Task - {task}: Accuracy = {acc:.4f}, MAE = {mae:.4f}")
-        
-        for task in binary_tasks:
-            acc = val_aux_metrics['binary_task_acc'][task]
-            if acc < 0.9:
-                print(f"Binary Task - {task}: Accuracy = {acc:.4f}")
-
-        # Save best model
-        if val_metrics['BLEU'] > best_bleu_score:
-            best_bleu_score = val_metrics['BLEU']
-            torch.save(model.state_dict(), os.path.join(save_dir, 'ir_only_scaffold.pth'))
-            print(f"Best model saved with BLEU Score: {best_bleu_score:.4f}")
 
 
 
@@ -1020,27 +695,42 @@ for task in count_tasks:
     max_value = int(auxiliary_data[task].max())
     count_task_classes[task] = max_value + 1
 
-# Model loading and training setup
-model_path = './fangyang/gp/csv/weights_scaffold_at/0806_ft.pth'
 
-# Note: Uncomment and implement load_model function as needed
-# model = load_model(model_path, vocab_size, char2idx)
 
+# Initialize model
+# training model from scratch
+model = AtomPredictionModel(
+    vocab_size=vocab_size,
+    count_task_classes=count_task_classes,
+    binary_tasks=binary_tasks,
+).to(device)
+
+
+def init_weights(m):
+    if isinstance(m, nn.Linear) or isinstance(m, nn.Conv1d):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.Embedding):
+        nn.init.uniform_(m.weight, -0.1, 0.1)
+model.apply(init_weights)
+
+
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 ignore_index = char2idx['<PAD>']
 criterion = SMILESLoss(ignore_index)
 
 count_task_loss_fn = nn.CrossEntropyLoss()
 binary_task_loss_fn = nn.BCEWithLogitsLoss()
 
-# optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # Train the model
-# train(
-#     model,
-#     criterion,
-#     optimizer,
-#     train_dataloader,
-#     val_dataloader,
-#     epochs=1000,
-#     save_dir=f'./fangyang/gp/csv/weights_{data_split_mode}_at'
-# )
+train(
+    model,
+    criterion,
+    optimizer,
+    train_dataloader,
+    val_dataloader,
+    epochs=1000,
+    save_dir=f'./fangyang/gp/csv/weights'
+)
