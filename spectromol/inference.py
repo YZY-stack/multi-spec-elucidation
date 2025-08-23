@@ -833,7 +833,7 @@ if __name__ == "__main__":
 
 
 
-    auxiliary_data = pd.read_csv('./spectromol/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
+    auxiliary_data = pd.read_csv('./spectromol/qm9_all_raw_spe/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
 
 
     columns = auxiliary_data.columns.tolist()
@@ -855,9 +855,9 @@ if __name__ == "__main__":
 
         
     # First read dataset split files
-    train_df = pd.read_csv(f'./spectromol/csv/dataset/{data_split_mode}/train.csv')
-    val_df = pd.read_csv(f'./spectromol/csv/dataset/{data_split_mode}/val.csv')
-    test_df = pd.read_csv(f'./spectromol/csv/dataset/{data_split_mode}/test.csv')
+    train_df = pd.read_csv(f'./spectromol/qm9_all_raw_spe/dataset_split/{data_split_mode}/train.csv')
+    val_df = pd.read_csv(f'./spectromol/qm9_all_raw_spe/dataset_split/{data_split_mode}/val.csv')
+    test_df = pd.read_csv(f'./spectromol/qm9_all_raw_spe/dataset_split/{data_split_mode}/test.csv')
 
     # If there are abnormal samples, first remove corresponding SMILES from data split files
     if len(all_abnormal_indices) > 0:
