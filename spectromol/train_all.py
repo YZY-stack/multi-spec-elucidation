@@ -12,7 +12,6 @@ from math import sqrt
 import torch
 import torch.nn as nn
 import torch.utils.data as data
-from torch.utils.data import DataLoader
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -69,6 +68,215 @@ def get_smiles_weight(epoch, total_epochs, k=5):
     """
     return 1 - math.exp(-k * epoch / total_epochs)
 
+
+
+
+def evaluate_at(epoch, model, dataloader, char2idx, idx2char, max_seq_length=100):
+    """
+    Evaluate model with auxiliary tasks during training.
+    
+    Args:
+        epoch: Current epoch number
+        model: The model to evaluate
+        dataloader: Validation dataloader
+        char2idx: Character to index mapping
+        idx2char: Index to character mapping
+        max_seq_length: Maximum sequence length for generation
+        
+    Returns:
+        Tuple of (main_metrics, auxiliary_metrics)
+    """
+    model.eval()
+    samples = []
+    total_bleu_score = 0.0
+    total_cos_score = 0.0
+    total_correct = 0
+    total_smiles = 0
+    bad_sm_count = 0
+    n_exact = 0
+    maccs_sim, rdk_sim, morgan_sim, levs = [], [], [], []
+
+    # Initialize auxiliary task metrics
+    count_task_true = {task: [] for task in count_tasks}
+    count_task_pred = {task: [] for task in count_tasks}
+    binary_task_true = {task: [] for task in binary_tasks}
+    binary_task_pred = {task: [] for task in binary_tasks}
+
+    smoothie = SmoothingFunction().method4
+
+    with torch.no_grad():
+        for i, (ir, uv, c_spec, h_spec, high_mass, smiles_indices, auxiliary_targets, atom_types) in enumerate(
+                tqdm(dataloader, desc="Evaluating", ncols=100)):
+            # Move data to device
+            ir, uv, c_spec, h_spec = ir.to(device), uv.to(device), c_spec.to(device), h_spec.to(device)
+            high_mass, smiles_indices = high_mass.to(device), smiles_indices.to(device)
+            auxiliary_targets, atom_types = auxiliary_targets.to(device), atom_types.to(device)
+            batch_size = ir.size(0)
+
+            # Get true SMILES
+            true_smiles_list = []
+            for j in range(batch_size):
+                true_indices = smiles_indices[j]
+                true_smiles_tokens = []
+                for idx in true_indices:
+                    idx = idx.item()
+                    if idx == char2idx['<EOS>']:
+                        break
+                    elif idx not in [char2idx['<PAD>'], char2idx['<SOS>']]:
+                        true_smiles_tokens.append(idx2char.get(idx, '<UNK>'))
+                true_smiles_str = ''.join(true_smiles_tokens)
+                true_smiles_list.append(true_smiles_str)
+
+
+            # Greedy prediction
+            predicted_smiles_list = predict_greedy(
+                model, ir, uv, c_spec, h_spec, high_mass,
+                char2idx, idx2char, max_seq_length=max_seq_length, atom_types=atom_types)
+
+
+
+            for true_smiles_str, predicted_smiles_str in zip(true_smiles_list, predicted_smiles_list):
+                # For validity
+                try:
+                    tmp = Chem.CanonSmiles(predicted_smiles_str)
+                except:
+                    bad_sm_count += 1
+
+                try:
+                    mol_output = Chem.MolFromSmiles(predicted_smiles_str)
+                    mol_gt = Chem.MolFromSmiles(true_smiles_str)
+                    if Chem.MolToInchi(mol_output) == Chem.MolToInchi(mol_gt):
+                        n_exact += 1
+                    maccs_sim.append(DataStructs.FingerprintSimilarity(MACCSkeys.GenMACCSKeys(mol_output), MACCSkeys.GenMACCSKeys(mol_gt), metric=DataStructs.TanimotoSimilarity))
+                    rdk_sim.append(DataStructs.FingerprintSimilarity(Chem.RDKFingerprint(mol_output), Chem.RDKFingerprint(mol_gt), metric=DataStructs.TanimotoSimilarity))
+                    morgan_sim.append(DataStructs.TanimotoSimilarity(AllChem.GetMorganFingerprint(mol_output, 2), AllChem.GetMorganFingerprint(mol_gt, 2)))
+                except:
+                    pass
+
+                # Compute BLEU score
+                reference = [list(true_smiles_str)]
+                candidate = list(predicted_smiles_str)
+                bleu_score = sentence_bleu(reference, candidate, smoothing_function=smoothie)
+                total_bleu_score += bleu_score
+
+                # Compute SMILES accuracy
+                try:
+                    tmp_1 = Chem.CanonSmiles(predicted_smiles_str)
+                    tmp_2 = Chem.CanonSmiles(true_smiles_str)
+                    if tmp_1 == tmp_2:
+                        total_correct += 1
+                except:
+                    if predicted_smiles_str == true_smiles_str:
+                        total_correct += 1
+                total_smiles += 1
+
+                # Compute Cos-sim
+                cos_sim = cosine_similarity(predicted_smiles_str, true_smiles_str)
+                total_cos_score += cos_sim
+
+                # Compute L-Distance
+                l_dis = lev(predicted_smiles_str, true_smiles_str)
+                levs.append(l_dis)
+
+
+            # Get auxiliary task predictions
+            # Prepare dummy target sequence (only for getting auxiliary outputs)
+            tgt_seq = torch.full((1, batch_size), char2idx['<SOS>'], dtype=torch.long, device=device)
+            tgt_mask = model.smiles_decoder.generate_square_subsequent_mask(1).to(device)
+
+
+            _, _, _, count_task_outputs, binary_task_outputs = model(
+                ir, uv, c_spec, h_spec, high_mass, tgt_seq, tgt_mask, atom_types=atom_types)
+
+            # Collect auxiliary task predictions and true values
+            # Count tasks
+            for idx_task, task in enumerate(count_tasks):
+                target = auxiliary_targets[:, idx_task].cpu().numpy()  # Shape: [batch_size]
+                logits = count_task_outputs[task]  # Shape: [batch_size, num_classes]
+                predictions = logits.argmax(dim=1).cpu().numpy()  # Shape: [batch_size]
+                count_task_true[task].extend(target)
+                count_task_pred[task].extend(predictions)
+
+            # Binary tasks
+            for idx_task, task in enumerate(binary_tasks):
+                target = auxiliary_targets[:, len(count_tasks) + idx_task].cpu().numpy()
+                logit = binary_task_outputs[task]
+                predictions = (torch.sigmoid(logit) > 0.5).int().cpu().numpy()
+                binary_task_true[task].extend(target)
+                binary_task_pred[task].extend(predictions)
+
+
+
+        avg_bleu_score = total_bleu_score / total_smiles
+        accuracy = total_correct / total_smiles
+        # Compute validity
+        validity  = (total_smiles - bad_sm_count) / total_smiles
+        cos_sim_all = total_cos_score / total_smiles
+        exact = n_exact * 1.0 / total_smiles
+
+
+        results_dict = {
+            'BLEU': avg_bleu_score,
+            'validity': validity,
+            'Levenshtein': np.mean(levs),
+            'Cosine Similarity': cos_sim_all,
+            'Top1 Acc': accuracy,
+            'Exact': exact,
+            "MACCS FTS": np.mean(maccs_sim),
+            "RDKit FTS": np.mean(rdk_sim),
+            "Morgan FTS": np.mean(morgan_sim),
+        }
+
+        # Compute auxiliary task metrics
+        from sklearn.metrics import accuracy_score, mean_absolute_error
+
+        count_task_acc = {}
+        count_task_mae = {}
+        for task in count_tasks:
+            y_true = count_task_true[task]
+            y_pred = count_task_pred[task]
+            acc = accuracy_score(y_true, y_pred)
+            mae = mean_absolute_error(y_true, y_pred)
+            count_task_acc[task] = acc
+            count_task_mae[task] = mae
+
+        binary_task_acc = {}
+        for task in binary_tasks:
+            y_true = binary_task_true[task]
+            y_pred = binary_task_pred[task]
+            acc = accuracy_score(y_true, y_pred)
+            binary_task_acc[task] = acc
+
+        # # Display sample results
+        # for i, sample in enumerate(samples):
+        #     print(f"\nSample {i+1}:")
+        #     print(f"True SMILES: {sample['True SMILES']}")
+        #     print(f"Predicted SMILES: {sample['Predicted SMILES']}")
+        #     print(f"BLEU Score: {sample['BLEU Score']:.4f}")
+        #     print("Auxiliary Task Predictions:")
+        #     for task in count_tasks + binary_tasks:
+        #         true_value = sample['Auxiliary True'][task]
+        #         predicted_value = sample['Auxiliary Predicted'][task]
+        #         print(f"  {task}: True = {true_value}, Predicted = {predicted_value}")
+        #     print("-" * 50)
+
+        # Return metrics
+        val_aux_metrics = {
+            'count_task_acc': 0,
+            'count_task_mae': 0,
+            'binary_task_acc': 0,
+        }
+
+
+        # if epoch % 10 == 0:
+        #     os.makedirs(f"./results_new/", exist_ok=True)
+        #     with open(f"results_new/epoch_{epoch}_results.csv", 'w', newline='') as file:
+        #         writer = csv.DictWriter(file, fieldnames=['pred_smiles', 'true_smiles', 'BLEU'])
+        #         writer.writeheader()
+        #         writer.writerows(results)
+
+        return results_dict, val_aux_metrics
+        # return avg_bleu_score, accuracy, val_aux_metrics
 
 
 
@@ -190,30 +398,17 @@ def evaluate(epoch, model, dataloader, char2idx, idx2char, max_seq_length=100):
 
 
 
+import torch.nn.functional as F
 def predict_greedy(model, ir, uv, c_spec, h_spectrum, high_mass, char2idx, idx2char, max_seq_length=100, atom_types=None):
-    """
-    Generate SMILES using greedy decoding.
-    
-    Args:
-        model: The trained model
-        ir, uv, c_spec, h_spectrum, high_mass: Input spectral data
-        char2idx: Character to index mapping
-        idx2char: Index to character mapping
-        max_seq_length: Maximum sequence length for generation
-        atom_types: Atom type information
-        
-    Returns:
-        List of generated SMILES strings
-    """
     model.eval()
     with torch.no_grad():
-        # Split h_spectrum into different components
+        # Split h_spectrum into h_spectrum_part, f_spectrum, n_spectrum
         h_spectrum_part = h_spectrum[:, :382]
         f_spectrum = h_spectrum[:, 382:394]
         n_spectrum = h_spectrum[:, 394:408]
         o_spectrum = h_spectrum[:, 408:]
 
-        # Prepare features dictionary
+        # Prepare features
         features = {
             'ir': ir,
             'uv': uv,
@@ -225,34 +420,53 @@ def predict_greedy(model, ir, uv, c_spec, h_spectrum, high_mass, char2idx, idx2c
             'mass_high': high_mass
         }
 
-        # Tokenize features and apply transformer encoder
-        tokens = model.tokenizer(features).permute(1, 0, 2)
-        memory, attention = model.transformer_encoder(tokens)
+        # Tokenize features
+        tokens = model.tokenizer(features)  # Shape: [batch_size, total_N_features, d_model]
+
+        # Permute for transformer input: [seq_len, batch_size, d_model]
+        tokens = tokens.permute(1, 0, 2)
+
+        # Apply transformer encoder
+        memory, attention = model.transformer_encoder(tokens)  # Shape: [seq_len, batch_size, d_model]
 
         batch_size = ir.size(0)
         device = ir.device
 
-        # Initialize sequence with SOS tokens
-        tgt_indices = torch.full((1, batch_size), char2idx['<SOS>'], dtype=torch.long, device=device)
+        # Initialize input sequence with <SOS> tokens
+        tgt_indices = torch.full((1, batch_size), char2idx['<SOS>'], dtype=torch.long, device=device)  # Shape: [1, batch_size]
+
         generated_tokens = []
 
         for _ in range(max_seq_length):
+            # Generate target mask
             tgt_mask = model.smiles_decoder.generate_square_subsequent_mask(tgt_indices.size(0)).to(device)
-            
-            output = model.smiles_decoder(tgt_indices, memory, tgt_mask=tgt_mask, atom_types=atom_types)
-            output_logits = output[-1, :, :]
-            next_token = output_logits.argmax(dim=-1)
-            
-            generated_tokens.append(next_token.unsqueeze(0))
-            tgt_indices = torch.cat([tgt_indices, next_token.unsqueeze(0)], dim=0)
 
+            # Decode using the SMILES decoder
+            output = model.smiles_decoder(
+                tgt_indices,
+                memory,
+                tgt_mask=tgt_mask,
+                atom_types=atom_types
+            )  # Shape: [tgt_seq_len, batch_size, vocab_size]
+
+            # Get the last timestep output
+            output_logits = output[-1, :, :]  # Shape: [batch_size, vocab_size]
+
+            # Greedy decoding: select the token with highest probability
+            next_token = output_logits.argmax(dim=-1)  # Shape: [batch_size]
+
+            generated_tokens.append(next_token.unsqueeze(0))  # Shape: [1, batch_size]
+
+            # Append the next token to the target indices
+            tgt_indices = torch.cat([tgt_indices, next_token.unsqueeze(0)], dim=0)  # Shape: [tgt_seq_len + 1, batch_size]
+
+            # Stop if all sequences have generated <EOS>
             if (next_token == char2idx['<EOS>']).all():
                 break
 
-        # Convert token indices to SMILES strings
-        generated_tokens = torch.cat(generated_tokens, dim=0)
+        # Convert generated token indices to SMILES strings
+        generated_tokens = torch.cat(generated_tokens, dim=0)  # Shape: [generated_seq_len, batch_size]
         generated_smiles = []
-        
         for i in range(batch_size):
             token_indices = generated_tokens[:, i].cpu().numpy()
             tokens = []
@@ -269,39 +483,48 @@ def predict_greedy(model, ir, uv, c_spec, h_spectrum, high_mass, char2idx, idx2c
 
 
 
-def train(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, epochs=10, save_dir='./model_weights_smiles'):
+
+# 定义权重调节函数
+def get_smiles_weight(epoch, total_epochs, k=5):
     """
-    Train model without auxiliary tasks.
-    
+    计算 SMILES 损失的权重，基于指数增长。
     Args:
-        model: The model to train
-        smiles_loss_fn: Loss function for SMILES generation
-        optimizer: Optimizer for training
-        train_dataloader: Training data loader
-        val_dataloader: Validation data loader
-        epochs: Number of training epochs
-        save_dir: Directory to save model weights
+        epoch (int): 当前的训练轮次
+        total_epochs (int): 总训练轮次
+        k (float): 控制增长速率的参数
+    Returns:
+        float: SMILES 损失的权重
     """
+    return 1 - math.exp(-k * epoch / total_epochs)
+
+
+
+
+def train_at(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, epochs=10, save_dir='./model_weights_smiles'):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    best_bleu_score = 0.0
+    best_bleu_score = 0.0  # 用于保存最佳模型
+    feature_loss_fn = nn.MSELoss()
 
     for epoch in range(epochs):
         model.train()
         total_loss = 0
-        progress_bar = tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{epochs}]", 
-                          total=len(train_dataloader), ncols=100)
-        
+        progress_bar = tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{epochs}]", total=len(train_dataloader), ncols=100)
         for i, (ir, uv, c_spec, h_spec, high_mass, smiles_indices, auxiliary_targets, atom_types) in enumerate(progress_bar):
             # Move data to device
-            ir, uv, c_spec, h_spec = ir.to(device), uv.to(device), c_spec.to(device), h_spec.to(device)
-            high_mass, smiles_indices = high_mass.to(device), smiles_indices.to(device)
-            auxiliary_targets, atom_types = auxiliary_targets.to(device), atom_types.to(device)
+            ir = ir.to(device)
+            uv = uv.to(device)
+            c_spec = c_spec.to(device)
+            h_spec = h_spec.to(device)
+            high_mass = high_mass.to(device)
+            smiles_indices = smiles_indices.to(device)
+            auxiliary_targets = auxiliary_targets.to(device)
+            atom_types = atom_types.to(device)
 
             optimizer.zero_grad()
 
-            # Prepare target sequences
+            # Prepare target sequence
             tgt_seq = smiles_indices.transpose(0, 1)[:-1]
             tgt_output = smiles_indices.transpose(0, 1)[1:]
 
@@ -310,31 +533,156 @@ def train(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, ep
             tgt_mask = model.smiles_decoder.generate_square_subsequent_mask(seq_len).to(device)
 
             # Forward pass
-            output_spectra, attention, fusion_feat, count_task_outputs, binary_task_outputs = model(
+            output_spectra, output_mol, spectra_feat, count_task_outputs, binary_task_outputs = model(
                 ir, uv, c_spec, h_spec, high_mass, tgt_seq, tgt_mask, atom_types)
 
-            # Compute main task loss
+            # Compute main task loss (from spectral features)
             output_flat = output_spectra.reshape(-1, output_spectra.size(-1))
             tgt_output_flat = tgt_output.reshape(-1)
             loss_smiles_spectra = smiles_loss_fn(output_flat, tgt_output_flat)
 
-            total_loss = loss_smiles_spectra
+            # # Compute loss from molecular features
+            # output_mol_flat = output_mol.reshape(-1, output_mol.size(-1))
+            # loss_smiles_mol = smiles_loss_fn(output_mol_flat, tgt_output_flat)
 
-            # Backward pass and optimization
+            # # Compute feature loss between spectra_feat and mol_feat
+            # feature_loss = feature_loss_fn(spectra_feat, mol_feat)
+
+            # # Total loss
+            # total_loss = loss_smiles_spectra
+
+            # 计算辅助任务损失
+            total_auxiliary_loss = 0.0
+
+            # 计数任务
+            for idx, task in enumerate(count_tasks):
+                target = auxiliary_targets[:, idx].long()
+                logits = count_task_outputs[task]
+                loss = count_task_loss_fn(logits, target)
+                total_auxiliary_loss += loss
+
+            # 二元分类任务
+            for idx, task in enumerate(binary_tasks):
+                target = auxiliary_targets[:, len(count_tasks) + idx].float()
+                logit = binary_task_outputs[task]
+                loss = binary_task_loss_fn(logit, target)
+                total_auxiliary_loss += loss
+
+            # 总损失
+            total_loss = loss_smiles_spectra + 0.1*total_auxiliary_loss
+            # total_loss = total_auxiliary_loss
+            # if epoch < 50:
+            #     total_loss = total_auxiliary_loss
+            # else:
+            #     total_loss = loss_smiles_spectra
+            # # 动态调整总损失
+            # w_smiles = get_smiles_weight(epoch, 200, k=5)
+            # total_loss = w_smiles * loss_smiles_spectra + (1 - w_smiles) * total_auxiliary_loss
+
+            # 反向传播和优化
             total_loss.backward()
             optimizer.step()
 
-            # Update progress bar
+            # 日志记录
             avg_loss = total_loss.item() / (i + 1)
             progress_bar.set_postfix({'Loss': avg_loss})
 
-        # Validation at epoch end
+        # 每个 epoch 结束后在验证集上评估
+        print(f"\nEpoch [{epoch+1}/{epochs}], Training Loss: {avg_loss:.4f}")
+        # print(f"\nEpoch [{epoch+1}/{epochs}], Training Loss: {avg_loss:.4f}, Weight for the main task: {w_smiles:.4f}")
+        print(f"Epoch: {epoch+1}, starting validation...")
+
+        # 在验证集上评估
+        val_metrics, val_aux_metrics = evaluate(
+            epoch, model, val_dataloader, char2idx, idx2char, max_seq_length=max_seq_length)
+        # val_bleu_score, val_acc = evaluate(
+        #     model, val_dataloader, char2idx, idx2char, max_seq_length=max_seq_length)
+        for key, value in val_metrics.items():
+            print(f"{key}: {value:.4f}")
+
+        # 打印辅助任务指标
+        print("\nValidation Auxiliary Task Metrics:")
+        for task in count_tasks:
+            acc = val_aux_metrics['count_task_acc'][task]
+            mae = val_aux_metrics['count_task_mae'][task]
+            if acc < 0.9:
+                print(f"Count Task - {task}: Accuracy = {acc:.4f}, MAE = {mae:.4f}")
+        
+        for task in binary_tasks:
+            acc = val_aux_metrics['binary_task_acc'][task]
+            if acc < 0.9:
+                print(f"Binary Task - {task}: Accuracy = {acc:.4f}")
+
+        # 保存最佳模型
+        if val_metrics['BLEU'] > best_bleu_score:
+            best_bleu_score = val_metrics['BLEU']
+            torch.save(model.state_dict(), os.path.join(save_dir, 'ir_only_scaffold.pth'))
+            print(f"Best model saved with BLEU Score: {best_bleu_score:.4f}")
+
+
+
+
+def train(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, epochs=10, save_dir='./model_weights_smiles'):
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    best_bleu_score = 0.0  # 用于保存最佳模型
+    feature_loss_fn = nn.MSELoss()
+
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0
+        progress_bar = tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{epochs}]", total=len(train_dataloader), ncols=100)
+        for i, (ir, uv, c_spec, h_spec, high_mass, smiles_indices, auxiliary_targets, atom_types) in enumerate(progress_bar):
+            # Move data to device
+            ir = ir.to(device)
+            uv = uv.to(device)
+            c_spec = c_spec.to(device)
+            h_spec = h_spec.to(device)
+            high_mass = high_mass.to(device)
+            smiles_indices = smiles_indices.to(device)
+            auxiliary_targets = auxiliary_targets.to(device)
+            atom_types = atom_types.to(device)
+
+            optimizer.zero_grad()
+
+            # Prepare target sequence
+            tgt_seq = smiles_indices.transpose(0, 1)[:-1]
+            tgt_output = smiles_indices.transpose(0, 1)[1:]
+
+            # Generate mask
+            seq_len = tgt_seq.size(0)
+            tgt_mask = model.smiles_decoder.generate_square_subsequent_mask(seq_len).to(device)
+
+
+
+            # Forward pass
+            output_spectra, attention, fusion_feat, count_task_outputs, binary_task_outputs = model(
+                ir, uv, c_spec, h_spec, high_mass, tgt_seq, tgt_mask, atom_types)
+
+            # Compute main task loss (from spectral features)
+            output_flat = output_spectra.reshape(-1, output_spectra.size(-1))
+            tgt_output_flat = tgt_output.reshape(-1)
+            loss_smiles_spectra = smiles_loss_fn(output_flat, tgt_output_flat)
+
+            # 总损失
+            total_loss = loss_smiles_spectra
+
+            # 反向传播和优化
+            total_loss.backward()
+            optimizer.step()
+
+            # 日志记录
+            avg_loss = total_loss.item() / (i + 1)
+            progress_bar.set_postfix({'Loss': avg_loss})
+
+        # 每个 epoch 结束后在验证集上评估
         print(f"\nEpoch [{epoch+1}/{epochs}], Training Loss: {avg_loss:.4f}")
         print(f"Epoch: {epoch+1}, starting validation...")
 
+        # 在验证集上评估
         val_metrics, val_aux_metrics = evaluate(
             epoch, model, val_dataloader, char2idx, idx2char, max_seq_length=max_seq_length)
-        
         for key, value in val_metrics.items():
             print(f"{key}: {value:.4f}")
 
@@ -343,8 +691,8 @@ def train(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, ep
         if val_bleu_score > best_bleu_score:
             best_bleu_score = val_bleu_score
             print(f"Current best model with BLEU Score: {best_bleu_score:.4f}")
-            os.makedirs(save_dir, exist_ok=True)
-            torch.save(model.state_dict(), os.path.join(save_dir, 'best.pth'))
+            # if val_bleu_score > 0.89:
+            torch.save(model.state_dict(), os.path.join(save_dir, 'tmp.pth'))
 
 
 
@@ -352,7 +700,6 @@ def train(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader, ep
 
 import torch.nn.functional as F
 
-# Define SMILES vocabulary and mappings
 SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
                 'C', 'N', 'O', 'F',
                 '1', '2', '3', '4', '5',
@@ -360,86 +707,94 @@ SMILES_VOCAB = ['<PAD>', '<SOS>', '<EOS>', '<UNK>',
                 ]
 vocab_size = len(SMILES_VOCAB)
 
-# Create character to index and index to character mappings
+# 创建字符到索引的映射和索引到字符的映射
 char2idx = {token: idx for idx, token in enumerate(SMILES_VOCAB)}
 idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
 
-# Data loading and preprocessing
-# Load UV spectra
-print('Loading UV spectra file...')
+
+
+# uv
+print('load uv file...')
 uv_max_value = 15.0
-uv_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/uv.csv')
+uv_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/uv.csv')
 peak_columns = [col for col in uv_spe_filtered.columns if 'peak' in col]
 uv_spe_filtered[peak_columns] = uv_spe_filtered[peak_columns] / uv_max_value
 uv_spe_filtered = uv_spe_filtered.to_numpy()
-print('UV spectra shape:', uv_spe_filtered.shape)
+print('uv_spe_filtered:', uv_spe_filtered.shape)
 
-# Load IR spectra
-print('Loading IR spectra file...')
+
+# ir
+print('load ir file...')
 ir_max_value = 4000.0
-ir_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/ir_82.csv')
+ir_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/ir_82.csv')
 peak_columns = [col for col in ir_spe_filtered.columns if 'peak' in col]
 ir_spe_filtered[peak_columns] = ir_spe_filtered[peak_columns] / ir_max_value
 ir_spe_filtered = ir_spe_filtered.to_numpy()
-print('IR spectra shape:', ir_spe_filtered.shape)
+print('ir_spe_filtered:', ir_spe_filtered.shape)
 
-# Load C-NMR with DEPT
-print('Loading 1D C-NMR with DEPT file...')
+
+# c-nmr
+print('load 1dc-nmr with dept file...')
 cnmr_max_value = 220.0
 cnmr_min_value = -10.0
-nmrc_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_cnmr_dept.csv')
+nmrc_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_cnmr_dept.csv')
 peak_columns = [col for col in nmrc_spe_filtered.columns if 'peak' in col]
 nmrc_spe_filtered[peak_columns] = (nmrc_spe_filtered[peak_columns] - cnmr_min_value) / (cnmr_max_value - cnmr_min_value)
 nmrc_spe_filtered = nmrc_spe_filtered.to_numpy()
 
-print('Loading 2D C-NMR (C-C, C-X) file...')
+print('load 2dc-nmr (c-c, c-x) file...')
 cnmr_2d_max_value = 450.0
 cnmr_2d_min_value = -400.0
-twoD_nmr = pd.read_csv('./spectromol/qm9_all_raw_spe/2d_cnmr_ina_chsqc.csv')
+twoD_nmr = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_cnmr_ina_chsqc.csv')
 peak_columns = [col for col in twoD_nmr.columns if 'peak' in col]
 twoD_nmr[peak_columns] = (twoD_nmr[peak_columns] - cnmr_2d_min_value) / (cnmr_2d_max_value - cnmr_2d_min_value)
 twoD_nmr = twoD_nmr.to_numpy()
 nmrc_spe_filtered = np.concatenate((nmrc_spe_filtered, twoD_nmr), axis=1)
-print('C-NMR spectra shape:', nmrc_spe_filtered.shape)
+print('nmrc_spe_filtered:', nmrc_spe_filtered.shape)
 
-# Load H-NMR spectra
-print('Loading 1D H-NMR file...')
+
+
+# h-nmr
+print('load 1d h-nmr file...')
 nmrh_max_value = 12.0
 nmrh_min_value = -2.0
-nmrh_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_hnmr.csv')
+nmrh_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_hnmr.csv')
 peak_columns = [col for col in nmrh_spe_filtered.columns if 'peak' in col]
 
-# Filter H-NMR abnormal values - identify abnormal samples first
+# 过滤H-NMR异常值 - 先识别异常样本，但不对其归一化
 print('Filtering H-NMR samples with abnormal values...')
 threshold = 500.0
 nmrh_max_values = nmrh_spe_filtered[peak_columns].max(axis=1)
 h_nmr_abnormal_mask = nmrh_max_values > threshold
 h_nmr_abnormal_indices = set(np.where(h_nmr_abnormal_mask)[0])
 
-# Normalize using predefined min/max values
+# 使用你设定的min和max值进行归一化（对所有样本，包括异常样本，但异常样本稍后会被过滤掉）
 nmrh_spe_filtered[peak_columns] = (nmrh_spe_filtered[peak_columns] - nmrh_min_value) / (nmrh_max_value - nmrh_min_value)
 nmrh_spe_filtered = nmrh_spe_filtered.to_numpy()
 
-# Load HSQC
+
+# HSQC
 hsqc_max_value = 400.0
 hsqc_min_value = -350.0
-hsqc = pd.read_csv('./spectromol/qm9_all_raw_spe/2d_hhsqc.csv')
+hsqc = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_hhsqc.csv')
 peak_columns = [col for col in hsqc.columns if 'peak' in col]
 hsqc[peak_columns] = (hsqc[peak_columns] - hsqc_min_value) / (hsqc_max_value - hsqc_min_value)
 hsqc = hsqc.to_numpy()
 
-# Load COSY
+
+# COSY
 cosy_max_value = 14.0
 cosy_min_value = -2.0
-nmr_cosy = pd.read_csv('./spectromol/qm9_all_raw_spe/2d_hcosy.csv')
+nmr_cosy = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/2d_hcosy.csv')
 hxyh_columns = [col for col in nmr_cosy.columns if 'H_X_Y_H' in col]
 nmr_cosy = nmr_cosy[hxyh_columns]
 peak_columns = [col for col in nmr_cosy.columns if 'peak' in col]
 nmr_cosy[peak_columns] = (nmr_cosy[peak_columns] - cosy_min_value) / (cosy_max_value - cosy_min_value)
 nmr_cosy = nmr_cosy.to_numpy()
 
-# Combine all abnormal sample indices
+# 合并所有异常样本索引
+# all_abnormal_indices = h_nmr_abnormal_indices.union(j2d_abnormal_indices)
 all_abnormal_indices = h_nmr_abnormal_indices
 all_abnormal_indices = sorted(list(all_abnormal_indices))
 print(f"Found {len(all_abnormal_indices)} samples with abnormal values (> {threshold})")
@@ -447,12 +802,13 @@ print(f"Found {len(all_abnormal_indices)} samples with abnormal values (> {thres
 if len(all_abnormal_indices) > 0:
     print(f"First 10 abnormal sample indices: {all_abnormal_indices[:10]}")
 
-# Load X-NMR files
-print('Loading X-NMR files...')
+
+# x-nmr
+print('load x-nmr file...')
 # F-NMR
 fnmr_max_value = 0.0001
 fnmr_min_value = -400.0
-nmrf_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_fnmr.csv')
+nmrf_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_fnmr.csv')
 peak_columns = [col for col in nmrf_spe_filtered.columns if 'peak' in col]
 nmrf_spe_filtered[peak_columns] = (nmrf_spe_filtered[peak_columns] - fnmr_min_value) / (fnmr_max_value - fnmr_min_value)
 nmrf_spe_filtered = nmrf_spe_filtered.to_numpy()
@@ -460,7 +816,7 @@ nmrf_spe_filtered = nmrf_spe_filtered.to_numpy()
 # N-NMR  
 nnmr_max_value = 400.0
 nnmr_min_value = -260.0
-nmrn_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_nnmr.csv')
+nmrn_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_nnmr.csv')
 peak_columns = [col for col in nmrn_spe_filtered.columns if 'peak' in col]
 nmrn_spe_filtered[peak_columns] = (nmrn_spe_filtered[peak_columns] - nnmr_min_value) / (nnmr_max_value - nnmr_min_value)
 nmrn_spe_filtered = nmrn_spe_filtered.to_numpy()
@@ -468,45 +824,87 @@ nmrn_spe_filtered = nmrn_spe_filtered.to_numpy()
 # O-NMR
 onmr_max_value = 460.0
 onmr_min_value = -385.0
-nmro_spe_filtered = pd.read_csv('./spectromol/qm9_all_raw_spe/1d_onmr.csv')
+nmro_spe_filtered = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/1d_onmr.csv')
 peak_columns = [col for col in nmro_spe_filtered.columns if 'peak' in col]
 nmro_spe_filtered[peak_columns] = (nmro_spe_filtered[peak_columns] - onmr_min_value) / (onmr_max_value - onmr_min_value)
 nmro_spe_filtered = nmro_spe_filtered.to_numpy()
 
-# Combine all H-NMR and X-NMR features
+# combine all h-nmr and x-nmr features together
 nmrh_spe_filtered = np.concatenate((nmrh_spe_filtered, hsqc, nmr_cosy, nmrf_spe_filtered, nmrn_spe_filtered, nmro_spe_filtered), axis=1)
-print('Combined H-NMR features shape:', nmrh_spe_filtered.shape)
+# nmrh_spe_filtered = np.concatenate((nmrh_spe_filtered, hsqc, nmr_cosy, j2d, nmrf_spe_filtered, nmrn_spe_filtered, nmro_spe_filtered), axis=1)
 
-# Load high-mass spectra
-print('Loading high-mass spectra file...')
-mass = pd.read_csv('./spectromol/qm9_all_raw_spe/ms.csv')
+print('nmrh_spe_filtered:', nmrh_spe_filtered.shape)
+
+
+# zhipu
+print('load high-mass file...')
+mass = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/ms.csv')
 high_mass_spe = mass.to_numpy()
-print('High-mass spectra shape:', high_mass_spe.shape)
+print('high-mass_spe:', high_mass_spe.shape)
 
-# Extract atom type information
+
+# atom type
 atom_type = high_mass_spe[:, 1:-1]
 print(f"Atom type shape: {atom_type.shape}")
 
-# Load SMILES data
-smiles_list = pd.read_csv('./spectromol/qm9_all_raw_spe/smiles.csv').values.tolist()
+
+# smiles
+smiles_list = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/qm9_all_raw_spe/smiles.csv').values.tolist() ### [[smiles1], [smiles2], ...]
 smiles_lengths = [len(smiles[0]) for smiles in smiles_list]
 max_smiles_length = max(smiles_lengths)
 max_seq_length = max_smiles_length + 2
-print(f"Maximum SMILES sequence length: {max_smiles_length}")
-print(f"Max sequence length for model: {max_seq_length}")
+print(f"SMILES 序列的最大长度为：{max_smiles_length}")
+print(f"模型中应使用的 max_seq_length 为：{max_seq_length}")
 
-# Load auxiliary task data
-auxiliary_data = pd.read_csv('./spectromol/qm9_all_raw_spe/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
+
+# 获取所有辅助任务
+# # Get the list of columns
+# # auxiliary_data = pd.read_csv('/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task_canonical.csv')
+# auxiliary_data = pd.read_csv('/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/aligned_smiles_id_aux_task.csv')
+# columns = auxiliary_data.columns.tolist()
+# # Exclude 'smiles' and 'id' columns to get auxiliary tasks
+# auxiliary_tasks = [col for col in columns if col not in ['smiles', 'id']]
+# print(f"Auxiliary tasks: {auxiliary_tasks}")
+
+
+
+# file_prefixes = {
+#     "c_nmr": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/C_NMR_TA.csv',
+#     "h_nmr": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/H_NMR_TA.csv',
+#     # "ir": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/IR_TA.csv',
+#     "ms": '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/smiles-transformer-master/Auxiliary_Task/MS_TA.csv',
+# }
+# auxiliary_data = pd.DataFrame()
+# for prefix, filepath in file_prefixes.items():
+#     df = pd.read_csv(filepath).iloc[:, 3:]
+#     df.columns = [f"{prefix}_{col}" for col in df.columns]
+#     auxiliary_data = pd.concat([auxiliary_data, df], axis=1)
+
+
+auxiliary_data = pd.read_csv('/data4/linkaiqing/sm_pretrained/gp/aligned_smiles_id_aux_task.csv').iloc[:, 2:]
+
 
 columns = auxiliary_data.columns.tolist()
 auxiliary_tasks = [col for col in columns]
+# auxiliary_tasks = ['ring_count']
 
+# 从 auxiliary_data 中筛选包含 "ring" 的列
+# ring_columns = [col for col in auxiliary_data.columns if "ring" in col.lower()]
+# ring_columns = [
+#     "c_nmr_Ring_size1", "c_nmr_Ring_size2", "c_nmr_Ring_size3", "c_nmr_Ring_size4", "c_nmr_Ring_size5", "c_nmr_Ring_size6",
+#     "h_nmr_H_connected_ring_size1", "h_nmr_H_connected_ring_size2", "h_nmr_H_connected_ring_size3", "h_nmr_H_connected_ring_size4", "h_nmr_H_connected_ring_size5", "h_nmr_H_connected_ring_size6", "h_nmr_H_connected_ring_size7", "h_nmr_H_connected_ring_size8",
+# ]
+# # 只保留带有 "ring" 的特征
+# auxiliary_data = auxiliary_data[ring_columns]
+# # 更新 auxiliary_tasks 列表
+# auxiliary_tasks = ring_columns
 print(f"Auxiliary tasks: {auxiliary_tasks}")
-print(f"Number of auxiliary tasks: {len(auxiliary_tasks)}")
+print(f"Number of ATs: {len(auxiliary_tasks)}")
+
+
 
 
 def get_indices(smiles_series, smiles_to_index):
-    """Get indices for SMILES in the dataset."""
     indices = []
     missing_smiles = []
     for smiles in smiles_series:
@@ -520,16 +918,16 @@ def get_indices(smiles_series, smiles_to_index):
 
     
 
-# Load dataset split files
-train_df = pd.read_csv(f'./spectromol/qm9_all_raw_spe/dataset_split/{data_split_mode}/train.csv')
-val_df = pd.read_csv(f'./spectromol/qm9_all_raw_spe/dataset_split/{data_split_mode}/val.csv')
-test_df = pd.read_csv(f'./spectromol/qm9_all_raw_spe/dataset_split/{data_split_mode}/test.csv')
+# 先读取数据集划分文件
+train_df = pd.read_csv(f'/data4/linkaiqing/sm_pretrained/gp/csv/dataset/{data_split_mode}/train.csv')
+val_df = pd.read_csv(f'/data4/linkaiqing/sm_pretrained/gp/csv/dataset/{data_split_mode}/val.csv')
+test_df = pd.read_csv(f'/data4/linkaiqing/sm_pretrained/gp/csv/dataset/{data_split_mode}/test.csv')
 
-# Remove abnormal samples from dataset split files if any exist
+# 如果有异常样本，先从数据划分文件中移除对应的SMILES
 if len(all_abnormal_indices) > 0:
     print(f"Processing {len(all_abnormal_indices)} abnormal samples...")
     
-    # Get SMILES corresponding to abnormal samples
+    # 获取异常样本对应的SMILES
     abnormal_smiles = set()
     for idx in all_abnormal_indices:
         if idx < len(smiles_list):
@@ -537,7 +935,7 @@ if len(all_abnormal_indices) > 0:
     
     print(f"Found {len(abnormal_smiles)} unique abnormal SMILES")
     
-    # Remove abnormal SMILES from each dataset
+    # 从各个数据集中移除异常SMILES
     original_train_size = len(train_df)
     original_val_size = len(val_df)
     original_test_size = len(test_df)
@@ -550,12 +948,12 @@ if len(all_abnormal_indices) > 0:
     print(f"Val set: {original_val_size} -> {len(val_df)} (removed {original_val_size - len(val_df)})")
     print(f"Test set: {original_test_size} -> {len(test_df)} (removed {original_test_size - len(test_df)})")
     
-    # Filter original data arrays
+    # 然后过滤原始数据
     total_samples = len(smiles_list)
     normal_mask = np.ones(total_samples, dtype=bool)
     normal_mask[all_abnormal_indices] = False
     
-    # Apply filter to all arrays
+    # 过滤所有数组
     ir_spe_filtered = ir_spe_filtered[normal_mask]
     uv_spe_filtered = uv_spe_filtered[normal_mask]
     nmrh_spe_filtered = nmrh_spe_filtered[normal_mask]
@@ -563,7 +961,7 @@ if len(all_abnormal_indices) > 0:
     high_mass_spe = high_mass_spe[normal_mask]
     atom_type = atom_type[normal_mask]
     
-    # Create filtered SMILES list
+    # 使用原始的smiles_list创建过滤后的列表
     original_smiles_list = smiles_list.copy()
     smiles_list = [original_smiles_list[i] for i in range(total_samples) if normal_mask[i]]
     auxiliary_data = auxiliary_data[normal_mask].reset_index(drop=True)
@@ -571,20 +969,19 @@ if len(all_abnormal_indices) > 0:
     print(f"Filtered dataset: {total_samples} -> {len(smiles_list)} samples")
 
 print(f"Final dataset size: {len(smiles_list)}")
-print(f"Data consistency check...")
+print(f"确保数据一致性检查...")
 assert len(smiles_list) == len(auxiliary_data) == ir_spe_filtered.shape[0], "Data length mismatch after filtering!"
-print("Data consistency check passed.")
 
-# Create SMILES to index mapping
+# 创建 SMILES 到索引的映射
 smiles_to_index = {smiles[0]: idx for idx, smiles in enumerate(smiles_list)}
 
-# Get indices for each dataset split
+# 4. 获取各数据集的索引
 train_indices, train_missing_smiles = get_indices(train_df['smiles'], smiles_to_index)
 val_indices, val_missing_smiles = get_indices(val_df['smiles'], smiles_to_index)
 test_indices, test_missing_smiles = get_indices(test_df['smiles'], smiles_to_index)
 
 
-# Split training data
+# 划分训练集数据
 train_ir_spe_filtered = ir_spe_filtered[train_indices]
 train_uv_spe_filtered = uv_spe_filtered[train_indices]
 train_nmrh_spe_filtered = nmrh_spe_filtered[train_indices]
@@ -594,7 +991,9 @@ train_smiles_list = [smiles_list[idx] for idx in train_indices]
 train_aux_data = auxiliary_data.iloc[train_indices].reset_index(drop=True)
 atom_types_list_train = atom_type[train_indices]
 
-# Split validation data
+
+
+# 划分验证集数据
 val_ir_spe_filtered = ir_spe_filtered[val_indices]
 val_uv_spe_filtered = uv_spe_filtered[val_indices]
 val_nmrh_spe_filtered = nmrh_spe_filtered[val_indices]
@@ -604,7 +1003,7 @@ val_smiles_list = [smiles_list[idx] for idx in val_indices]
 val_aux_data = auxiliary_data.iloc[val_indices].reset_index(drop=True)
 atom_types_list_val = atom_type[val_indices]
 
-# Split test data
+# 划分测试集数据
 test_ir_spe_filtered = ir_spe_filtered[test_indices]
 test_uv_spe_filtered = uv_spe_filtered[test_indices]
 test_nmrh_spe_filtered = nmrh_spe_filtered[test_indices]
@@ -614,11 +1013,14 @@ test_smiles_list = [smiles_list[idx] for idx in test_indices]
 test_aux_data = auxiliary_data.iloc[test_indices].reset_index(drop=True)
 atom_types_list_test = atom_type[test_indices]
 
-# Define count_tasks and binary_tasks
+
+
+# 定义 count_tasks 和 binary_tasks
 count_tasks = [at for at in auxiliary_tasks if 'Has' not in at and 'Is' not in at]
 binary_tasks = [at for at in auxiliary_tasks if 'Has' in at or 'Is' in at]
 
-# Create training dataset
+
+# 创建训练集数据集
 train_dataset = SpectraDataset(
     ir_spectra=train_ir_spe_filtered,
     uv_spectra=train_uv_spe_filtered,
@@ -634,7 +1036,7 @@ train_dataset = SpectraDataset(
     atom_types_list=atom_types_list_train, 
 )
 
-# Create validation dataset
+# 创建验证集数据集
 val_dataset = SpectraDataset(
     ir_spectra=val_ir_spe_filtered,
     uv_spectra=val_uv_spe_filtered,
@@ -650,7 +1052,7 @@ val_dataset = SpectraDataset(
     atom_types_list=atom_types_list_val, 
 )
 
-# Create test dataset
+# 创建测试集数据集
 test_dataset = SpectraDataset(
     ir_spectra=test_ir_spe_filtered,
     uv_spectra=test_uv_spe_filtered,
@@ -663,11 +1065,13 @@ test_dataset = SpectraDataset(
     max_seq_length=max_seq_length,
     count_tasks=count_tasks,
     binary_tasks=binary_tasks,
-    atom_types_list=atom_types_list_test, 
+    atom_types_list=atom_types_list_val, 
 )
 
 
-# Create data loaders
+from torch.utils.data import DataLoader
+
+# 创建训练集数据加载器
 train_dataloader = DataLoader(
     train_dataset, 
     batch_size=128,
@@ -676,6 +1080,7 @@ train_dataloader = DataLoader(
     pin_memory=True
 )
 
+# 创建验证集数据加载器
 val_dataloader = DataLoader(
     val_dataset,
     batch_size=128, 
@@ -684,6 +1089,7 @@ val_dataloader = DataLoader(
     drop_last=True,
 )
 
+# 创建测试集数据加载器（如果需要）
 test_dataloader = DataLoader(
     test_dataset,
     batch_size=1,
@@ -691,39 +1097,72 @@ test_dataloader = DataLoader(
     num_workers=0
 )
 
-# # Calculate number of classes for each count task
-# count_task_classes = {}
-# for task in count_tasks:
-#     max_value = int(auxiliary_data[task].max())
-#     count_task_classes[task] = max_value + 1
 
 
 
-# Initialize model
-# training model from scratch without using auxiliary tasks
-model = AtomPredictionModel(
-    vocab_size=vocab_size,
-    count_tasks_classes=None,
-    binary_tasks=None,
-).to(device)
+
+# 计算每个计数任务的类别数
+count_task_classes = {}
+for task in count_tasks:
+    max_value = int(auxiliary_data[task].max())
+    count_task_classes[task] = max_value + 1  # 类别数
 
 
-def init_weights(m):
-    if isinstance(m, nn.Linear) or isinstance(m, nn.Conv1d):
-        nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
-    elif isinstance(m, nn.Embedding):
-        nn.init.uniform_(m.weight, -0.1, 0.1)
-model.apply(init_weights)
+
+# # 实例化模型时，传递 count_task_classes
+# model = AtomPredictionModel(vocab_size, count_task_classes, binary_tasks).to(device)
 
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+# def load_model(model_path, vocab_size, char2idx):
+#     # 初始化模型
+#     model = AtomPredictionModel(vocab_size=vocab_size, count_tasks_classes=count_task_classes, binary_tasks=binary_tasks)
+#     model.to(device)
+
+#     # 加载预训练模型权重
+#     pretrained_dict = torch.load(model_path, map_location=device)
+#     model_dict = model.state_dict()
+
+#     # 保留预训练权重中匹配的部分
+#     pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict and 'count_task_heads' not in k and 'binary_task_heads' not in k}
+#     model_dict.update(pretrained_dict)
+#     model.load_state_dict(model_dict)
+
+#     # 冻结预训练部分
+#     for name, param in model.named_parameters():
+#         if 'count_task_heads' not in name and 'binary_task_heads' not in name:
+#             param.requires_grad = False
+
+#     model.eval()
+#     return model
+
+
+# def init_weights(m):
+#     if isinstance(m, nn.Linear) or isinstance(m, nn.Conv1d):
+#         nn.init.xavier_uniform_(m.weight)
+#         if m.bias is not None:
+#             nn.init.zeros_(m.bias)
+#     elif isinstance(m, nn.Embedding):
+#         nn.init.uniform_(m.weight, -0.1, 0.1)
+# model.apply(init_weights)
+
+ # 定义模型文件路径
+model_path = '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/weights_scaffold_at/0806_ft.pth'
+
+# 加载模型
+model = load_model(model_path, vocab_size, char2idx)
+
+# criterion = ContrastiveLoss()
+# criterion = AtomPredictionLoss()
 ignore_index = char2idx['<PAD>']
 criterion = SMILESLoss(ignore_index)
 
 count_task_loss_fn = nn.CrossEntropyLoss()
 binary_task_loss_fn = nn.BCEWithLogitsLoss()
+
+# 定义优化器，仅优化新增的 count_task_heads 和 binary_task_heads
+# trainable_params = [param for name, param in model.named_parameters() if param.requires_grad]
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
 
 
 # Train the model
@@ -734,5 +1173,5 @@ train(
     train_dataloader,
     val_dataloader,
     epochs=1000,
-    save_dir=f'./spectromol/csv/weights'
+    save_dir=f'/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/weights_{data_split_mode}_at'
 )

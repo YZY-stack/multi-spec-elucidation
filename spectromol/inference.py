@@ -1008,7 +1008,7 @@ if __name__ == "__main__":
         char2idx,
         idx2char,
         max_seq_length=100,
-        save_dir='./fangyang/spectromol/csv/corr_draw'  # Directory to save attention plots
+        save_dir='./fangyang/spectromol/csv'  # Directory to save attention plots
     )
 
     # print(f"Average BLEU score on test set: {avg_bleu_score}")

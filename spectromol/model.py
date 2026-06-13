@@ -454,28 +454,53 @@ class SMILESEncoderDecoder(nn.Module):
         self.layer_norm = nn.LayerNorm(d_model)
 
 
-    def forward(self, tgt, memory, tgt_mask=None, atom_types=None):
+    # def forward(self, tgt, memory, tgt_mask=None, atom_types=None):
+    #     """
+    #     tgt: [seq_len, batch_size]
+    #     memory: [memory_seq_len, batch_size, d_model]
+    #     atom_types: [batch_size, num_atom_types]
+    #     """
+    #     tgt_emb = self.embedding(tgt) * math.sqrt(self.d_model)
+    #     tgt_emb = self.pos_encoder(tgt_emb)  # [seq_len, batch_size, d_model]
+
+    #     # Process atom_types
+    #     if atom_types is not None:
+    #         atom_types_feat = self.atom_types_linear(atom_types)  # [batch_size, d_model]
+    #         atom_types_feat = torch.relu(atom_types_feat)
+    #         atom_types_feat = atom_types_feat.unsqueeze(0)  # [1, batch_size, d_model]
+
+    #         # Expand atom_types_feat to the same time dimension as tgt_emb
+    #         atom_types_feat = atom_types_feat.expand(tgt_emb.size(0), -1, -1)  # [seq_len, batch_size, d_model]
+
+    #         # Combine atom_types_feat with tgt_emb
+    #         tgt_emb = tgt_emb + atom_types_feat
+
+    #     output = self.transformer_decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+    #     output = self.fc_out(output)
+    #     return output
+    
+    def forward(self, tgt, memory, tgt_mask=None, atom_types=None,
+                memory_key_padding_mask=None):
         """
-        tgt: [seq_len, batch_size]
-        memory: [memory_seq_len, batch_size, d_model]
-        atom_types: [batch_size, num_atom_types]
+        tgt: [seq_len, batch]
+        memory: [mem_len, batch, d_model]
+        memory_key_padding_mask: [batch, mem_len]  # True=屏蔽
         """
         tgt_emb = self.embedding(tgt) * math.sqrt(self.d_model)
-        tgt_emb = self.pos_encoder(tgt_emb)  # [seq_len, batch_size, d_model]
+        tgt_emb = self.pos_encoder(tgt_emb)
 
-        # Process atom_types
         if atom_types is not None:
-            atom_types_feat = self.atom_types_linear(atom_types)  # [batch_size, d_model]
-            atom_types_feat = torch.relu(atom_types_feat)
-            atom_types_feat = atom_types_feat.unsqueeze(0)  # [1, batch_size, d_model]
-
-            # Expand atom_types_feat to the same time dimension as tgt_emb
-            atom_types_feat = atom_types_feat.expand(tgt_emb.size(0), -1, -1)  # [seq_len, batch_size, d_model]
-
-            # Combine atom_types_feat with tgt_emb
+            atom_types_feat = self.atom_types_linear(atom_types)
+            atom_types_feat = torch.relu(atom_types_feat).unsqueeze(0)          # [1, batch, d]
+            atom_types_feat = atom_types_feat.expand(tgt_emb.size(0), -1, -1)   # [seq_len, batch, d]
             tgt_emb = tgt_emb + atom_types_feat
 
-        output = self.transformer_decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+        # 关键：把 memory_key_padding_mask 传给 decoder
+        output = self.transformer_decoder(
+            tgt_emb, memory,
+            tgt_mask=tgt_mask,
+            memory_key_padding_mask=memory_key_padding_mask
+        )
         output = self.fc_out(output)
         return output
 
