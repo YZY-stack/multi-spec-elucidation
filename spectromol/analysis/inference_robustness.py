@@ -84,15 +84,14 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
     with torch.no_grad():
         for batch in tqdm(dataloader):
             # Unpack batch data
-            ir_spectrum, raman_spectrum, c_spectrum, h_spectrum, low_res_mass, high_res_mass, \
-            smiles_indices, auxiliary_targets, atom_types, coordinates = batch
+            ir_spectrum, uv_spectrum, c_spectrum, h_spectrum, high_res_mass, \
+            smiles_indices, auxiliary_targets, atom_types = batch
 
             # Move data to device
             ir_spectrum = ir_spectrum.to(device)
-            raman_spectrum = raman_spectrum.to(device)
+            uv_spectrum = uv_spectrum.to(device)
             c_spectrum = c_spectrum.to(device)
             h_spectrum = h_spectrum.to(device)
-            low_res_mass = low_res_mass.to(device)
             high_res_mass = high_res_mass.to(device)
             smiles_indices = smiles_indices.to(device)
             atom_types = atom_types.to(device) if atom_types is not None else None
@@ -117,10 +116,9 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
             predicted_smiles_list = inference(
                 model,
                 ir_spectrum,
-                raman_spectrum,
+                uv_spectrum,
                 c_spectrum,
                 h_spectrum,
-                low_res_mass,
                 high_res_mass,
                 char2idx,
                 idx2char,
@@ -201,7 +199,7 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
                 #     analyze_feature_correlations(
                 #         model,
                 #         ir_spectrum[i].unsqueeze(0),
-                #         raman_spectrum[i].unsqueeze(0),
+                #         uv_spectrum[i].unsqueeze(0),
                 #         c_spectrum[i].unsqueeze(0),
                 #         h_spectrum[i].unsqueeze(0),
                 #         low_res_mass[i].unsqueeze(0),
@@ -269,14 +267,13 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
     with torch.no_grad():
         for batch in tqdm(dataloader):
-            ir_spectrum, raman_spectrum, c_spectrum, h_spectrum, low_res_mass, high_res_mass, \
-            smiles_indices, auxiliary_targets, atom_types, coordinates = batch
+            ir_spectrum, uv_spectrum, c_spectrum, h_spectrum, high_res_mass, \
+            smiles_indices, auxiliary_targets, atom_types = batch
 
             ir_spectrum = ir_spectrum.to(device)
-            raman_spectrum = raman_spectrum.to(device)
+            uv_spectrum = uv_spectrum.to(device)
             c_spectrum = c_spectrum.to(device)
             h_spectrum = h_spectrum.to(device)
-            low_res_mass = low_res_mass.to(device)
             high_res_mass = high_res_mass.to(device)
             smiles_indices = smiles_indices.to(device)
             atom_types = atom_types.to(device) if atom_types is not None else None
@@ -311,10 +308,9 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
             predicted_smiles_list = inference(
                 model,
                 ir_spectrum,
-                raman_spectrum,
+                uv_spectrum,
                 c_spectrum,
                 h_spectrum,
-                low_res_mass,
                 high_res_mass,
                 char2idx,
                 idx2char,
@@ -473,8 +469,8 @@ def inference_with_analysis(model, dataloader, char2idx, idx2char, max_seq_lengt
 
 
 # Define single sample inference function
-def inference_(model, ir_spectrum, raman_spectrum, c_spectrum, h_spectrum,
-              low_res_mass, high_res_mass, char2idx, idx2char, max_seq_length=100, atom_types=None):
+def inference_(model, ir_spectrum, uv_spectrum, c_spectrum, h_spectrum,
+              high_res_mass, char2idx, idx2char, max_seq_length=100, atom_types=None):
     model.eval()
     with torch.no_grad():
         # Split h_spectrum into h_spectrum_part, f_spectrum, n_spectrum
@@ -485,7 +481,7 @@ def inference_(model, ir_spectrum, raman_spectrum, c_spectrum, h_spectrum,
 
         features = {
             'ir': ir_spectrum,
-            'raman': raman_spectrum,
+            'uv': uv_spectrum,
             'nmr_c': c_spectrum,
             'nmr_h': h_spectrum_part,
             'f_spectrum': f_spectrum,
@@ -633,8 +629,8 @@ def update_ring_status_for_beam(seq_chars, open_rings):
 
 
 def inference(
-    model, ir_spectrum, raman_spectrum, c_spectrum, h_spectrum,
-    low_res_mass, high_res_mass, char2idx, idx2char,
+    model, ir_spectrum, uv_spectrum, c_spectrum, h_spectrum,
+    high_res_mass, char2idx, idx2char,
     max_seq_length=100, atom_types=None,
     required_atom_counts=None, beam_size=5, device='cuda'
 ):
@@ -658,7 +654,7 @@ def inference(
         # Prepare features
         features = {
             'ir': ir_spectrum,
-            'raman': raman_spectrum,
+            'uv': uv_spectrum,
             'nmr_c': c_spectrum,
             'nmr_h': h_spectrum_part,
             'f_spectrum': f_spectrum,
@@ -815,8 +811,8 @@ def inference(
 
 
 # 定义analyze_feature_correlations分析函数
-def analyze_feature_correlations(model, ir_column, nmr_c_column, ir_spectrum, raman_spectrum, c_spectrum, h_spectrum,
-                                 low_res_mass, high_res_mass, atom_types=None,
+def analyze_feature_correlations(model, ir_column, nmr_c_column, ir_spectrum, uv_spectrum, c_spectrum, h_spectrum,
+                                 high_res_mass, atom_types=None,
                                  smiles='', save_dir='corr_draw'):
     model.eval()
     with torch.no_grad():
@@ -829,7 +825,7 @@ def analyze_feature_correlations(model, ir_column, nmr_c_column, ir_spectrum, ra
         # 选择需要的 features（去掉 high-mass）
         features = {
             'ir': ir_spectrum,
-            # 'raman': raman_spectrum,
+            # 'uv': uv_spectrum,
             'nmr_c': c_spectrum,
             # 'nmr_h': h_spectrum_part,
             # 'f_spectrum': f_spectrum,
@@ -971,12 +967,13 @@ if __name__ == "__main__":
     scaler = StandardScaler()
 
     # ir and raman
-    print('load raman file...')
-    raman_spe_filtered = pd.read_csv('/root/workspace/smiles-transformer-master/csv/raw_spec/process_uv.csv').iloc[:, 1:]
-    peak_columns = [col for col in raman_spe_filtered.columns if 'peak' in col]
-    raman_spe_filtered[peak_columns] = scaler.fit_transform(raman_spe_filtered[peak_columns])
-    raman_spe_filtered = raman_spe_filtered.to_numpy()
-    # raman_spe_filtered = pd.read_csv('/root/workspace/smiles-transformer-master/csv/raman_spe_filtered_values.csv', header=None).to_numpy()
+    # NOTE: this CSV holds the UV-Vis spectra despite its historical filename.
+    print('load uv file...')
+    uv_spe_filtered = pd.read_csv('/root/workspace/smiles-transformer-master/csv/raw_spec/process_uv.csv').iloc[:, 1:]
+    peak_columns = [col for col in uv_spe_filtered.columns if 'peak' in col]
+    uv_spe_filtered[peak_columns] = scaler.fit_transform(uv_spe_filtered[peak_columns])
+    uv_spe_filtered = uv_spe_filtered.to_numpy()
+    # uv_spe_filtered = pd.read_csv('/root/workspace/smiles-transformer-master/csv/uv_spe_filtered_values.csv', header=None).to_numpy()
     print('load ir file...')
     # ir_spe_filtered = pd.read_csv('/root/workspace/smiles-transformer-master/csv/ir_spe_filtered_values.csv', header=None).to_numpy()
     ir_spe_filtered = pd.read_csv('/root/workspace/smiles-transformer-master/csv/sparse_ir_wsmiles.csv').iloc[:, 1:]
@@ -984,7 +981,7 @@ if __name__ == "__main__":
     peak_columns_ir = [col for col in ir_spe_filtered.columns if 'peak' in col]
     ir_spe_filtered[peak_columns_ir] = scaler.fit_transform(ir_spe_filtered[peak_columns_ir])
     ir_spe_filtered = ir_spe_filtered.to_numpy()
-    print('raman_spe_filtered:', raman_spe_filtered.shape)
+    print('uv_spe_filtered:', uv_spe_filtered.shape)
     print('ir_spe_filtered:', ir_spe_filtered.shape)
 
     # nmr
@@ -1137,7 +1134,7 @@ if __name__ == "__main__":
 
     # 划分验证集数据
     val_ir_spe_filtered = ir_spe_filtered[val_indices]
-    val_raman_spe_filtered = raman_spe_filtered[val_indices]
+    val_uv_spe_filtered = uv_spe_filtered[val_indices]
     val_nmrh_spe_filtered = nmrh_spe_filtered[val_indices]
     val_nmrc_spe_filtered = nmrc_spe_filtered[val_indices]
     val_low_mass_spe = low_mass_spe[val_indices]
@@ -1148,7 +1145,7 @@ if __name__ == "__main__":
 
     # 划分测试集数据
     test_ir_spe_filtered = ir_spe_filtered[test_indices]
-    test_raman_spe_filtered = raman_spe_filtered[test_indices]
+    test_uv_spe_filtered = uv_spe_filtered[test_indices]
     test_nmrh_spe_filtered = nmrh_spe_filtered[test_indices]
     test_nmrc_spe_filtered = nmrc_spe_filtered[test_indices]
     test_low_mass_spe = low_mass_spe[test_indices]
@@ -1175,10 +1172,9 @@ if __name__ == "__main__":
     # 创建验证集数据集
     val_dataset = SpectraDataset(
         ir_spectra=val_ir_spe_filtered,
-        raman_spectra=val_raman_spe_filtered,
+        uv_spectra=val_uv_spe_filtered,
         c_spectra=val_nmrc_spe_filtered,
         h_spectra=val_nmrh_spe_filtered,
-        low_mass_spectra=val_low_mass_spe,
         high_mass_spectra=val_high_mass_spe,
         smiles_list=val_smiles_list,
         auxiliary_data=val_aux_data,
@@ -1187,16 +1183,14 @@ if __name__ == "__main__":
         count_tasks=count_tasks,
         binary_tasks=binary_tasks,
         atom_types_list=atom_types_list_val, 
-        coordinates_list=None,
     )
 
     # 创建测试集数据集
     test_dataset = SpectraDataset(
         ir_spectra=test_ir_spe_filtered,
-        raman_spectra=test_raman_spe_filtered,
+        uv_spectra=test_uv_spe_filtered,
         c_spectra=test_nmrc_spe_filtered,
         h_spectra=test_nmrh_spe_filtered,
-        low_mass_spectra=test_low_mass_spe,
         high_mass_spectra=test_high_mass_spe,
         smiles_list=test_smiles_list,
         auxiliary_data=test_aux_data,
@@ -1205,7 +1199,6 @@ if __name__ == "__main__":
         count_tasks=count_tasks,
         binary_tasks=binary_tasks,
         atom_types_list=atom_types_list_test, 
-        coordinates_list=None
     )
 
 

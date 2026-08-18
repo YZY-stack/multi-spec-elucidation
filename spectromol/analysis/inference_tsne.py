@@ -68,10 +68,9 @@ idx2char = {idx: token for idx, token in enumerate(SMILES_VOCAB)}
 
 def extract_transformer_memory(model,
                                ir_spectrum, 
-                               raman_spectrum, 
+                               uv_spectrum, 
                                c_spectrum, 
                                h_spectrum,
-                               low_res_mass,
                                high_res_mass,
                                atom_types):
     """
@@ -88,13 +87,12 @@ def extract_transformer_memory(model,
         features = {
             # Add IR/Raman if your model uses them
             # "ir": ir_spectrum,
-            # "raman": raman_spectrum,
+            # "raman": uv_spectrum,
             "nmr_c": c_spectrum,
             "nmr_h": h_spectrum_part,
             "f_spectrum": f_spectrum,
             "n_spectrum": n_spectrum,
             "o_spectrum": o_spectrum,
-            # "mass_low": low_res_mass,
             "mass_high": high_res_mass
         }
 
@@ -119,7 +117,8 @@ def visualize_model_features(model,
                              char2idx,
                              idx2char,
                              method='tsne',
-                             save_plot='feature_space.png'):
+                             save_plot='feature_space.png',
+                             ring_counts=None):
     """
     遍历整个 dataloader，收集模型的 memory 表示，然后用 PCA/t-SNE 做 2D 降维并画图。
     
@@ -137,22 +136,22 @@ def visualize_model_features(model,
     all_features = []
     all_carbon_counts = []  # 例如，可以用碳原子数量作为可视化时的颜色标签
     ring_count_list = []
+    sample_offset = 0  # running index into `ring_counts`, which is aligned with
+                       # the dataset order (the dataloader must not shuffle)
     # 也可以存其他信息，如是否预测正确、分子量等
     
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Extracting features"):
             # 从 batch 解包
-            (ir_spectrum, raman_spectrum, c_spectrum, h_spectrum,
-             low_res_mass, high_res_mass,
-             smiles_indices, auxiliary_targets, atom_types, ring_count) = batch
+            (ir_spectrum, uv_spectrum, c_spectrum, h_spectrum,
+             high_res_mass, smiles_indices, auxiliary_targets, atom_types) = batch
 
             # 将数据转到 GPU (如果有的话)
             device = next(model.parameters()).device
             ir_spectrum = ir_spectrum.to(device)
-            raman_spectrum = raman_spectrum.to(device)
+            uv_spectrum = uv_spectrum.to(device)
             c_spectrum = c_spectrum.to(device)
             h_spectrum = h_spectrum.to(device)
-            low_res_mass = low_res_mass.to(device)
             high_res_mass = high_res_mass.to(device)
             if atom_types is not None:
                 atom_types = atom_types.to(device)
@@ -161,10 +160,9 @@ def visualize_model_features(model,
             memory_avg = extract_transformer_memory(
                 model,
                 ir_spectrum, 
-                raman_spectrum, 
+                uv_spectrum, 
                 c_spectrum, 
                 h_spectrum,
-                low_res_mass,
                 high_res_mass,
                 atom_types
             )  # shape [batch_size, d_model]
@@ -180,13 +178,15 @@ def visualize_model_features(model,
                     # 假设 atom_types[i, 2] 就是碳原子数量
                     c_count = atom_types[i, 2].item()
                     all_carbon_counts.append(c_count)
-                    ring = ring_count[i]
-                    ring_count_list.append(ring+1)
+                    if ring_counts is not None:
+                        ring_count_list.append(int(ring_counts[sample_offset + i]) + 1)
 
             else:
                 # 如果没有 atom_types，可选: 用 0 代替
                 batch_size = memory_avg.size(0)
                 all_carbon_counts.extend([0]*batch_size)
+
+            sample_offset += memory_avg.size(0)
 
     # 整合所有 batch 的特征
     all_features = np.concatenate(all_features, axis=0)  # shape: [N, d_model]
@@ -268,11 +268,12 @@ if __name__ == "__main__":
     scaler = StandardScaler()
 
     # ir and raman
-    print('load raman file...')
-    raman_spe_filtered = pd.read_csv('/root/workspace/smiles-transformer-master/csv/sparse_raman_wsmiles.csv').iloc[:, 1:].to_numpy()
+    # NOTE: this CSV holds the UV-Vis spectra despite its historical filename.
+    print('load uv file...')
+    uv_spe_filtered = pd.read_csv('/root/workspace/smiles-transformer-master/csv/sparse_raman_wsmiles.csv').iloc[:, 1:].to_numpy()
     print('load ir file...')
     ir_spe_filtered = pd.read_csv('/root/workspace/smiles-transformer-master/csv/sparse_ir_wsmiles.csv').iloc[:, 1:].to_numpy()
-    print('raman_spe_filtered:', raman_spe_filtered.shape)
+    print('uv_spe_filtered:', uv_spe_filtered.shape)
     print('ir_spe_filtered:', ir_spe_filtered.shape)
 
     # nmr
@@ -419,7 +420,7 @@ if __name__ == "__main__":
 
     # 划分验证集数据
     val_ir_spe_filtered = ir_spe_filtered[val_indices]
-    val_raman_spe_filtered = raman_spe_filtered[val_indices]
+    val_uv_spe_filtered = uv_spe_filtered[val_indices]
     val_nmrh_spe_filtered = nmrh_spe_filtered[val_indices]
     val_nmrc_spe_filtered = nmrc_spe_filtered[val_indices]
     val_low_mass_spe = low_mass_spe[val_indices]
@@ -431,7 +432,7 @@ if __name__ == "__main__":
 
     # 划分测试集数据
     test_ir_spe_filtered = ir_spe_filtered[test_indices]
-    test_raman_spe_filtered = raman_spe_filtered[test_indices]
+    test_uv_spe_filtered = uv_spe_filtered[test_indices]
     test_nmrh_spe_filtered = nmrh_spe_filtered[test_indices]
     test_nmrc_spe_filtered = nmrc_spe_filtered[test_indices]
     test_low_mass_spe = low_mass_spe[test_indices]
@@ -459,10 +460,9 @@ if __name__ == "__main__":
     # 创建验证集数据集
     val_dataset = SpectraDataset(
         ir_spectra=val_ir_spe_filtered,
-        raman_spectra=val_raman_spe_filtered,
+        uv_spectra=val_uv_spe_filtered,
         c_spectra=val_nmrc_spe_filtered,
         h_spectra=val_nmrh_spe_filtered,
-        low_mass_spectra=val_low_mass_spe,
         high_mass_spectra=val_high_mass_spe,
         smiles_list=val_smiles_list,
         auxiliary_data=val_aux_data,
@@ -471,16 +471,14 @@ if __name__ == "__main__":
         count_tasks=count_tasks,
         binary_tasks=binary_tasks,
         atom_types_list=atom_types_list_val, 
-        coordinates_list=ring_count_val,
     )
 
     # 创建测试集数据集
     test_dataset = SpectraDataset(
         ir_spectra=test_ir_spe_filtered,
-        raman_spectra=test_raman_spe_filtered,
+        uv_spectra=test_uv_spe_filtered,
         c_spectra=test_nmrc_spe_filtered,
         h_spectra=test_nmrh_spe_filtered,
-        low_mass_spectra=test_low_mass_spe,
         high_mass_spectra=test_high_mass_spe,
         smiles_list=test_smiles_list,
         auxiliary_data=test_aux_data,
@@ -489,7 +487,6 @@ if __name__ == "__main__":
         count_tasks=count_tasks,
         binary_tasks=binary_tasks,
         atom_types_list=atom_types_list_test, 
-        coordinates_list=ring_count_test
     )
 
 
@@ -520,5 +517,9 @@ if __name__ == "__main__":
         char2idx=char2idx,
         idx2char=idx2char,
         method='tsne',
-        save_plot='tsne_feature_space.png'
+        save_plot='tsne_feature_space.png',
+        # Ring counts are not carried by SpectraDataset; they are passed
+        # separately and are positionally aligned with the test split, which
+        # is why the dataloader above must keep shuffle=False.
+        ring_counts=ring_count_test,
     )

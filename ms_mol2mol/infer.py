@@ -199,7 +199,7 @@ def padding_or_deleting_atoms(input_smiles, input_atom_count, gt_atom_count):
                 smiles_chars.insert(pos, atom_symbol)
 
         elif diff < 0:  # Extra atoms -> delete
-                        for _ in range(-diff):
+            for _ in range(-diff):
                 positions = [idx for idx, ch in enumerate(smiles_chars) if ch == atom_symbol]
                 if positions:
                     smiles_chars.pop(random.choice(positions))

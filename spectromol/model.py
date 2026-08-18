@@ -148,27 +148,33 @@ class AtomPredictionModel(nn.Module):
 
 
 
-        # # Output head for counting tasks
-        # self.count_task_heads = nn.ModuleDict()
-        # for task, num_classes in count_tasks_classes.items():
-        #     self.count_task_heads[task] = nn.Sequential(
-        #         nn.Linear(self.d_model, num_classes),
-        #         # nn.ReLU(),
-        #         # nn.Linear(64, 128),
-        #         # nn.ReLU(),
-        #         # nn.Linear(128, num_classes)  # Output logits for number of classes
-        #     )
+        # Auxiliary prediction heads.
+        #
+        # These are active when `count_tasks_classes` and `binary_tasks` are
+        # supplied, and absent when both are None. The auxiliary-supervision
+        # configuration (heads active) is the one that produces the main
+        # reported results; passing None for both reproduces the
+        # SMILES-only ablation. See README for which setting corresponds to
+        # which reported number.
+        self.use_auxiliary_tasks = bool(count_tasks_classes) and bool(binary_tasks)
 
-        # # Output head for binary classification tasks
-        # self.binary_task_heads = nn.ModuleDict()
-        # for task in binary_tasks:
-        #     self.binary_task_heads[task] = nn.Sequential(
-        #         nn.Linear(self.d_model, 1),
-        #         # nn.ReLU(),
-        #         # nn.Linear(64, 128),
-        #         # nn.ReLU(),
-        #         # nn.Linear(128, 1)  # Output single logit
-        #     )
+        if self.use_auxiliary_tasks:
+            # Output head for counting tasks
+            self.count_task_heads = nn.ModuleDict()
+            for task, num_classes in count_tasks_classes.items():
+                self.count_task_heads[task] = nn.Sequential(
+                    nn.Linear(self.d_model, num_classes),
+                )
+
+            # Output head for binary classification tasks
+            self.binary_task_heads = nn.ModuleDict()
+            for task in binary_tasks:
+                self.binary_task_heads[task] = nn.Sequential(
+                    nn.Linear(self.d_model, 1),
+                )
+        else:
+            self.count_task_heads = None
+            self.binary_task_heads = None
 
 
     def forward(self, ir_spectrum, uv_spectrum, c_spectrum, h_spectrum,
@@ -244,22 +250,23 @@ class AtomPredictionModel(nn.Module):
 
 
 
-        # # Auxiliary task prediction
-        # count_task_outputs = {}
-        # for task, head in self.count_task_heads.items():
-        #     logits = head(fusion_feat)  # [batch_size, num_classes]
-        #     count_task_outputs[task] = logits
+        # Auxiliary task prediction.
+        # Returns populated dicts when the auxiliary heads are active, and
+        # (None, None) in the SMILES-only configuration.
+        if not self.use_auxiliary_tasks:
+            return output, attentions, fusion_feat, None, None
 
-        # binary_task_outputs = {}
-        # for task, head in self.binary_task_heads.items():
-        #     logit = head(fusion_feat).squeeze(1)  # [batch_size]
-        #     binary_task_outputs[task] = logit
+        count_task_outputs = {}
+        for task, head in self.count_task_heads.items():
+            logits = head(fusion_feat)  # [batch_size, num_classes]
+            count_task_outputs[task] = logits
 
-        # return output, attentions, fusion_feat, count_task_outputs, binary_task_outputs
+        binary_task_outputs = {}
+        for task, head in self.binary_task_heads.items():
+            logit = head(fusion_feat).squeeze(1)  # [batch_size]
+            binary_task_outputs[task] = logit
 
-
-
-        return output, attentions, fusion_feat, None, None  # Return attentions along with the output
+        return output, attentions, fusion_feat, count_task_outputs, binary_task_outputs
 
 
 

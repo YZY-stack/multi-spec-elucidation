@@ -642,6 +642,8 @@ class SMILESPretokenDataset(Dataset):
     """
     def __init__(self, csv_path: str, char2idx: Dict[str, int], max_seq_length: int, 
                  compute_atom_types_fn, corruption_level: float = 0.2):
+        """
+        csv_path: 数据路径。
                   如果是文件夹，则加载该文件夹下所有 CSV 文件（每个 CSV 文件第一行为标题，列名为 "SMILES"）；
                   如果是 CSV 文件，则只加载该文件的数据。
         char2idx: SMILES 到索引的映射字典
