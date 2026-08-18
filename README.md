@@ -19,9 +19,75 @@ This repository presents a comprehensive deep learning framework for automated m
 
 - **Multi-Modal Spectroscopy Integration**: Seamlessly processes IR, UV-Vis, NMR (¹H, ¹³C, ¹⁹F, ¹⁵N, ¹⁷O), and high-resolution mass spectrometry data
 - **Transformer-Based Architecture**: State-of-the-art attention mechanisms for complex spectral-structural relationships
-- **Molecular Generation**: Autoregressive SMILES generation with constraint-guided beam search
+- **Molecular Generation**: Autoregressive SMILES generation, with greedy decoding for single-output results and optional constraint-guided beam search for Top-*k* candidate sets
 - **Self-Supervised Learning**: Large-scale molecular pre-training with masked language modeling
 - **Multi-Task Learning**: Joint optimization of structure prediction and chemical property estimation
+
+
+## 📌 Reproducing the reported results
+
+This section states exactly which entry point and configuration produces which
+reported number, and which decoding strategy each result uses.
+
+### Configuration switch
+
+`spectromol/train_all.py` exposes a single flag:
+
+```python
+USE_AUXILIARY_TASKS = True   # auxiliary supervision active  (main results)
+USE_AUXILIARY_TASKS = False  # SMILES-only ablation
+```
+
+The auxiliary prediction heads (functional-group counts and binary structural
+attributes) are built in `AtomPredictionModel` when this flag is set. In the
+SMILES-only configuration the heads are absent and `forward()` returns `None`
+in the two auxiliary output slots.
+
+### Entry points
+
+| Purpose | Configuration | Function | File |
+|---|---|---|---|
+| Training, main reported model | `USE_AUXILIARY_TASKS = True` | `train_at()` | `spectromol/train_all.py` |
+| Training, SMILES-only ablation | `USE_AUXILIARY_TASKS = False` | `train()` | `spectromol/train_all.py` |
+| Evaluation with auxiliary metrics | auxiliary | `evaluate_at()` | `spectromol/train_all.py` |
+| Evaluation, structure metrics only | SMILES-only | `evaluate()` | `spectromol/train_all.py` |
+| Command-line inference | either | — | `spectromol/infer_cli.py` |
+| Refinement pretraining | — | — | `ms_mol2mol/pretrain.py` |
+| Refinement finetuning | — | — | `ms_mol2mol/finetune.py` |
+| Refinement inference | — | — | `ms_mol2mol/infer.py` |
+
+The auxiliary-supervision configuration (`train_at` + `evaluate_at`) is the one
+that produces the main multimodal result and the auxiliary-task analyses;
+`train` + `evaluate` reproduce the corresponding SMILES-only ablation.
+
+### Decoding strategy
+
+SpectroMol supports both greedy decoding and beam search, and they are used for
+different purposes:
+
+| Decoding | Used for |
+|---|---|
+| **Greedy** (`predict_greedy`) | Every single-output result, including all Top-1 accuracies reported in the main table and the experimental-adaptation results. No beam search, reranking, or rule-based filtering is applied. |
+| **Beam search** | Only where a ranked Top-*k* candidate set is required, including the candidate list passed to the refinement stage. |
+| **Optional rule filters** | Elemental-budget and SMILES-validity filters are applied *on top of* beam search when producing filtered candidate lists. They are not part of the decoder and are not used for the single-output results. |
+
+MS-Mol2Mol (the refinement stage) decodes by **multinomial sampling at
+temperature `T = 1.0`** with a mask-rate sweep and hard logit masking on
+exhausted element budgets — neither greedy decoding nor beam search.
+
+### SMILES conventions
+
+Training uses **Kekulé** SMILES, which reduces the token inventory the decoder
+must disambiguate and converges faster. All evaluation canonicalizes **both**
+the prediction and the reference with RDKit before comparison
+(`ms_mol2mol/infer.py::are_same_molecule`, `spectromol/metrics.py::normalize_smiles`),
+so reported exact-match rates are invariant to the Kekulé/aromatic distinction.
+
+### Note on data paths
+
+Several scripts still contain absolute paths from the original training
+environment (e.g. `/data4/...`, `/root/workspace/...`). Point these at your own
+copy of the dataset before running.
 
 ## 🏗️ Architecture
 

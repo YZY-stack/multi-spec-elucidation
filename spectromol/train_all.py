@@ -593,7 +593,9 @@ def train_at(model, smiles_loss_fn, optimizer, train_dataloader, val_dataloader,
         print(f"Epoch: {epoch+1}, starting validation...")
 
         # 在验证集上评估
-        val_metrics, val_aux_metrics = evaluate(
+        # Auxiliary-supervision path: validate with evaluate_at() so that the
+        # auxiliary-task metrics reported in Figure 5C are produced.
+        val_metrics, val_aux_metrics = evaluate_at(
             epoch, model, val_dataloader, char2idx, idx2char, max_seq_length=max_seq_length)
         # val_bleu_score, val_acc = evaluate(
         #     model, val_dataloader, char2idx, idx2char, max_seq_length=max_seq_length)
@@ -1020,6 +1022,22 @@ count_tasks = [at for at in auxiliary_tasks if 'Has' not in at and 'Is' not in a
 binary_tasks = [at for at in auxiliary_tasks if 'Has' in at or 'Is' in at]
 
 
+# ---------------------------------------------------------------------------
+# Auxiliary-task configuration.
+#
+#   USE_AUXILIARY_TASKS = True   -> auxiliary supervision active.
+#                                   Trains with train_at() / evaluates with
+#                                   evaluate_at(). This is the configuration
+#                                   used for the main reported results.
+#   USE_AUXILIARY_TASKS = False  -> SMILES-only ablation.
+#                                   Trains with train() / evaluates with
+#                                   evaluate().
+#
+# See README for which setting corresponds to which reported number.
+# ---------------------------------------------------------------------------
+USE_AUXILIARY_TASKS = True
+
+
 # 创建训练集数据集
 train_dataset = SpectraDataset(
     ir_spectra=train_ir_spe_filtered,
@@ -1149,6 +1167,60 @@ for task in count_tasks:
 model_path = '/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/weights_scaffold_at/0806_ft.pth'
 
 # 加载模型
+def load_model(model_path, vocab_size, char2idx, freeze_backbone=False):
+    """
+    Build SpectroMol and optionally load pretrained weights.
+
+    The auxiliary prediction heads are created when USE_AUXILIARY_TASKS is set;
+    otherwise the model is built in the SMILES-only configuration and
+    forward() returns (None, None) in the two auxiliary slots.
+
+    Args:
+        model_path (str): checkpoint to load; ignored if empty or missing.
+        vocab_size (int): SMILES vocabulary size.
+        char2idx (dict): character-to-index mapping (kept for signature
+            compatibility with the inference scripts).
+        freeze_backbone (bool): if True, freeze everything except the
+            auxiliary heads. Used only for the heads-only fine-tuning variant.
+    """
+    if USE_AUXILIARY_TASKS:
+        model = AtomPredictionModel(
+            vocab_size=vocab_size,
+            count_tasks_classes=count_task_classes,
+            binary_tasks=binary_tasks,
+        )
+    else:
+        model = AtomPredictionModel(
+            vocab_size=vocab_size,
+            count_tasks_classes=None,
+            binary_tasks=None,
+        )
+    model.to(device)
+
+    if model_path and os.path.exists(model_path):
+        pretrained_dict = torch.load(model_path, map_location=device)
+        model_dict = model.state_dict()
+        # Keep only tensors that exist in the current configuration with a
+        # matching shape, so a SMILES-only checkpoint can seed the
+        # auxiliary-task configuration and vice versa.
+        pretrained_dict = {
+            k: v for k, v in pretrained_dict.items()
+            if k in model_dict and v.shape == model_dict[k].shape
+        }
+        model_dict.update(pretrained_dict)
+        model.load_state_dict(model_dict)
+        print(f"Loaded {len(pretrained_dict)} pretrained tensors from {model_path}")
+    else:
+        print(f"No checkpoint at {model_path!r}; training from scratch.")
+
+    if freeze_backbone:
+        for name, param in model.named_parameters():
+            if 'count_task_heads' not in name and 'binary_task_heads' not in name:
+                param.requires_grad = False
+
+    return model
+
+
 model = load_model(model_path, vocab_size, char2idx)
 
 # criterion = ContrastiveLoss()
@@ -1165,13 +1237,28 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 
 
-# Train the model
-train(
-    model,
-    criterion,
-    optimizer,
-    train_dataloader,
-    val_dataloader,
-    epochs=1000,
-    save_dir=f'/data4/linkaiqing/sm_pretrained/fangyang/gp/csv/weights_{data_split_mode}_at'
-)
+# Train the model.
+# train_at()  -> auxiliary-supervision path (main reported results)
+# train()     -> SMILES-only ablation
+save_dir = f'./weights_{data_split_mode}_at'
+
+if USE_AUXILIARY_TASKS:
+    train_at(
+        model,
+        criterion,
+        optimizer,
+        train_dataloader,
+        val_dataloader,
+        epochs=1000,
+        save_dir=save_dir,
+    )
+else:
+    train(
+        model,
+        criterion,
+        optimizer,
+        train_dataloader,
+        val_dataloader,
+        epochs=1000,
+        save_dir=save_dir,
+    )
