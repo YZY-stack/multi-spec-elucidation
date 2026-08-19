@@ -940,7 +940,7 @@ if __name__ == "__main__":
         max_seq_length=max_seq_length,
         count_tasks=count_tasks,
         binary_tasks=binary_tasks,
-        atom_types_list=atom_types_list_val, 
+        atom_types_list=atom_types_list_test, 
     )
 
 
